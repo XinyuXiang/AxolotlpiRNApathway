@@ -1,0 +1,282 @@
+---
+title: "06_fulllenTE"
+author: "Xinyu Xiang"
+date: "2024-05-05"
+output: html_document
+---
+
+```{r setup}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(dplyr)
+library(ggplot2)
+library(cowplot)
+library(ggExtra)
+library(stringr)
+library(ggrepel)
+library(ggrastr)
+library(RColorBrewer)
+
+getwd()
+```
+
+# configure
+```{r}
+### color
+genome_composition_col <- c(LTR  = "#9b2226", DNA  = "#ca6702", LINE  = "#007f5f", SINE  = "#4895ef", DIRS  = "#e9d8a6", Low_complexity  = "#b6ad90", Ngaro  = "#b9fbc0", PLE  = "#e7bc91", RC = "#dbcdf0", Satellite  = "#c5dedd", Simple_repeat  = "#8eecf5", other  = "#eddcd2", unknown  = "#d3d3d3", Genome_other = "#f5f3f4")
+
+### order
+Chr_order <- paste0("chr", rep(1:14, each=2), rep(c("p", "q"), 14))
+TEclass_order <- c("LTR", "DNA", "LINE", "DIRS", "RC", "PLE", "SINE", "Simple_repeat", "Ngaro", "Low_complexity", "Satellite", "other", "unknown")
+
+```
+
+
+# 00. input TE annotation
+```{r cars}
+TEanno_df <- read.table("./04_RepeatMasker/04_merge/AmexG_v6.0-DD.TE.v2.bed", header = F)
+colnames(TEanno_df) <- c("Chr", "Start", "End", "TE", "percDiv", "Strand", "family", "class")
+TEanno_df <- TEanno_df %>% mutate(family = str_replace(family, "/", "-"), length = (End-Start+1))
+head(TEanno_df)
+```
+
+# 01. potential active TE filtering & scatter plot of length ~ percDiv for TE copy
+```{r}
+### input data ###
+TE.length.order <- read.csv(paste0("./06_fulllenTE/TElength.family.cutoff.csv"))
+TE.length.order <- TE.length.order %>% arrange(class, -length.perc)
+
+### output potential active TE (full length + young) ###
+data.filter.ls = list()
+for (j in 1:nrow(TE.length.order)) {
+  data.filter.ls[[j]] <- TEanno_df %>% filter(family == TE.length.order[j,"family"], 
+                                              length >= TE.length.order[j,"length.cutoff"], 
+                                              percDiv <= TE.length.order[j,"percDiv.cutoff"]) 
+}
+
+
+data.filter.df <- do.call(rbind, data.filter.ls) %>% 
+  mutate(Chr = factor(Chr, levels = Chr_order)) %>% 
+  arrange(Chr, Start, End)
+write.table(data.filter.df, "/datastore/home/s2215896/reference_AmexG_v6.0/AmexG_v6.0_TE_xinyu_anno/AmexG_v6.0-DD.TE.active.bed", quote = F, row.names = F, col.names = F, sep = "\t")
+```
+
+
+```{r}
+### plot ###
+data.all.ls = list()
+data.filter.ls = list()
+plot.ls = list()
+active.perc.ls = list()
+
+for (j in 1:nrow(TE.length.order)) {
+  data.all.ls[[j]] <- TEanno_df %>% filter(family == TE.length.order[j,"family"]) 
+  data.filter.ls[[j]] <- TEanno_df %>% filter(family == TE.length.order[j,"family"], 
+                                          length >= TE.length.order[j,"length.cutoff"], 
+                                          percDiv <= TE.length.order[j,"percDiv.cutoff"]) 
+  
+  active.perc.ls[[j]] <- data.frame(family = TE.length.order[j,"family"], total.copynum = nrow(data.all.ls[[j]]),
+                           active.copynum = nrow(data.filter.ls[[j]])) %>% mutate(active.perc = round(active.copynum / total.copynum*100, 3))
+
+  plot.ls[[j]] <- ggplot() +
+    geom_point(aes(x = data.all.ls[[j]]$percDiv, y = data.all.ls[[j]]$length), colour = "grey", fill = "grey", alpha=0.5, size = 0.5) +
+    geom_point(aes(x = data.filter.ls[[j]]$percDiv, y = data.filter.ls[[j]]$length), colour = "red", fill = "red",size = 0.5) +
+    labs( x = "% substitution to consensus", y = "Length (bp)",
+          title = paste0(TE.length.order[j, "family"], 
+                         ",", active.perc.ls[[j]]$active.copynum, 
+                         ",", active.perc.ls[[j]]$active.perc, "%") ) +
+    theme_classic() + 
+    xlim(0,70) + ylim(0, TE.length.order[j,"ylim.cutoff"]) + 
+    theme(text=element_text(size=40))
+  
+  plot.ls[[j]] <- plot.ls[[j]] %>%
+      ggMarginal(type = "histogram", # add histogram by side
+                 xparams = list(binwidth = 1, fill = "grey", color = "grey"),
+                 yparams = list(binwidth = 1, fill = "grey", color = "grey"))
+}  
+
+active.perc.df = do.call(rbind, active.perc.ls)
+TE.length.active.perc <- TE.length.order %>% left_join(active.perc.df)
+write.csv(TE.length.active.perc, paste0("./06_fulllenTE/TElength.family.cutoff.activeperc.csv"), row.names = F, quote = F)
+
+        
+# for (i in 1:length(y_axis)) {p = plot.ls[[i]]; print(p)}
+jpeg(paste0("./06_fulllenTE/scatter.length.percDiv.DNA.jpeg"), width = 6000, height = 4000)
+plot_grid(plot.ls[[2]], plot.ls[[3]], plot.ls[[4]], plot.ls[[5]], plot.ls[[6]], plot.ls[[7]], 
+          plot.ls[[8]], plot.ls[[9]], plot.ls[[10]], plot.ls[[11]], plot.ls[[12]], plot.ls[[13]], 
+          plot.ls[[14]], plot.ls[[15]], plot.ls[[16]], plot.ls[[17]], plot.ls[[18]], plot.ls[[19]], 
+          plot.ls[[20]], plot.ls[[21]], plot.ls[[22]], plot.ls[[23]], 
+          ncol = 6, nrow = 4)
+dev.off()
+
+jpeg(paste0("./06_fulllenTE/scatter.length.percDiv.LINE.jpeg"), width = 6000, height = 3000)
+plot_grid(plot.ls[[24]], plot.ls[[25]], plot.ls[[26]], plot.ls[[27]], plot.ls[[28]], plot.ls[[29]], 
+          plot.ls[[30]], plot.ls[[31]], plot.ls[[32]], plot.ls[[33]], plot.ls[[34]], plot.ls[[35]], 
+          plot.ls[[36]], 
+          ncol = 6, nrow = 3)
+dev.off()
+
+jpeg(paste0("./06_fulllenTE/scatter.length.percDiv.LTR.jpeg"), width = 6000, height = 2000)
+plot_grid(plot.ls[[37]], plot.ls[[38]], plot.ls[[39]], plot.ls[[40]], plot.ls[[41]], plot.ls[[42]], 
+          plot.ls[[43]], plot.ls[[44]], plot.ls[[45]], 
+          ncol = 6, nrow = 2)
+dev.off()
+
+jpeg(paste0("./06_fulllenTE/scatter.length.percDiv.SINE.jpeg"), width = 6000, height = 2000)
+plot_grid(plot.ls[[51]], plot.ls[[52]], plot.ls[[53]], plot.ls[[54]], plot.ls[[55]], plot.ls[[56]], 
+          plot.ls[[57]], 
+          ncol = 6, nrow = 2)
+dev.off()
+
+jpeg(paste0("./06_fulllenTE/scatter.length.percDiv.other.jpeg"), width = 6000, height = 3000)
+plot_grid(plot.ls[[1]], plot.ls[[46]], plot.ls[[47]], plot.ls[[48]], plot.ls[[49]], plot.ls[[50]], 
+          plot.ls[[58]], plot.ls[[59]], plot.ls[[60]], plot.ls[[61]], plot.ls[[62]], plot.ls[[63]], 
+          plot.ls[[64]], plot.ls[[65]], 
+          ncol = 6, nrow = 3)
+dev.off()
+
+jpeg(paste0("./06_fulllenTE/scatter.length.percDiv.selected.jpeg"), width = 6000, height = 3000)
+plot_grid(plot.ls[[37]], plot.ls[[38]], plot.ls[[43]], 
+          plot.ls[[25]], plot.ls[[26]], plot.ls[[28]], plot.ls[[31]],
+          plot.ls[[2]], plot.ls[[3]], plot.ls[[4]], plot.ls[[5]], plot.ls[[6]], 
+          plot.ls[[1]], plot.ls[[48]], plot.ls[[50]], 
+          ncol = 6, nrow = 3)
+dev.off()
+
+```
+
+# 02. lollipop chart of copy number and active TE perc for all TE family
+```{r}
+TE.length.active.perc <- read.csv("./06_fulllenTE/TElength.family.cutoff.activeperc.csv")
+head(TE.length.active.perc)
+
+plot.df <- TE.length.active.perc %>% 
+  mutate(log10.total.copynum = log10(total.copynum+1),
+         log10.active.copynum = log10(active.copynum+1),
+         class = factor(class, levels = TEclass_order)) %>% 
+  arrange(class, desc(total.copynum)) %>%
+  mutate(family = factor(family, levels = family))
+head(plot.df)
+
+### plot log10.total.copynum
+plot_totalcopynum <- ggplot(plot.df, aes(x=log10.total.copynum, y=family)) +
+  xlim(0, 7) + 
+  geom_segment(aes(xend=0, yend=family), color="grey") +
+  geom_point(aes(color=class), size=2) +  # 使用 class 列映射颜色，大小调整为2
+  scale_color_manual(values = genome_composition_col) +  # 使用预定义颜色
+  scale_y_discrete(limits = rev(unique(plot.df$family))) +  # 倒置 y 轴
+  scale_x_reverse() +  # 水平翻转x轴
+  theme_light() +
+  theme(
+    panel.grid.major.x = element_blank(),
+    panel.border = element_blank(),
+    axis.title.y = element_blank(),
+    legend.position = "left"  # 隐藏图例
+  )
+
+
+### plot active.copynum and active.perc
+plot_activecopynum <- ggplot(plot.df, aes(x=log10.active.copynum, y=family)) +
+  xlim(0, 7) + 
+  geom_segment(aes(xend=0, yend=family), color="grey") +
+  geom_point(aes(color=class), size=2) +  # 添加 color 映射到 aes()
+  scale_color_manual(values = genome_composition_col) +  # 使用预定义颜色
+  scale_y_discrete(limits = rev(unique(plot.df$family))) +  # 倒置 y 轴
+  theme_light() +
+  theme(
+    panel.grid.major.x = element_blank(),
+    panel.border = element_blank(),
+    axis.title.y = element_blank() 
+  )
+
+
+plot_activeperc <- ggplot(plot.df, aes(x=active.perc, y=family)) +
+  geom_col(aes(fill=class)) +  # 添加 color 映射到 aes()
+  scale_fill_manual(values = genome_composition_col) +  # 使用预定义颜色
+  scale_y_discrete(limits = rev(unique(plot.df$family))) +  # 倒置 y 轴
+  theme_light() +
+  theme(
+    panel.grid.major.x = element_blank(),
+    panel.border = element_blank(),
+    axis.title.y = element_blank(),
+    legend.position = "none",  # 隐藏图例
+    axis.text.y = element_blank()
+  )
+
+
+# 使用 cowplot 的 plot_grid 函数来并排显示两个图表
+pdf("./06_fulllenTE/lollipop.TEfamily.copynum.activeperc.pdf", height = 10, width = 12)
+plot_grid(plot_totalcopynum, plot_activecopynum, plot_activeperc, 
+          align = 'v', ncol = 3, rel_widths = c(1, 1, 0.25))
+dev.off()
+
+```
+
+
+
+# 03. plot pie chart for active TE composition
+```{r}
+TE.length.active.perc <- read.csv("./06_fulllenTE/TElength.family.cutoff.activeperc.csv")
+head(TE.length.active.perc)
+
+activeTE_composition <- TE.length.active.perc %>% 
+  arrange(-active.copynum) %>%
+  mutate(active.copynum.perc = round(active.copynum / sum(active.copynum) *100, 3),
+         Label = paste0(family," " , active.copynum.perc, "%"))
+write.csv(activeTE_composition, "./06_fulllenTE/pie.TElength.family.cutoff.activeperc.csv", quote = F, row.names = F)
+
+
+plot.df <- activeTE_composition %>% filter(active.copynum > 0) %>%
+  mutate(family = factor(family, levels = activeTE_composition$family))
+  
+random_colors <- sample(colors(), 20)
+
+pie_chart <- ggplot(plot.df, aes(x = "", y = active.copynum, fill = family)) +
+  geom_bar(width = 1, stat = "identity") +
+  coord_polar(theta = "y") + # 使用极坐标转换为饼图
+  theme_void() + # 移除多余的坐标轴和格线
+  scale_fill_manual(values = random_colors, labels = plot.df$Label)
+
+pdf("./06_fulllenTE/pie.TElength.family.cutoff.activeperc.pdf", height = 4, width = 6)
+plot(pie_chart)
+dev.off()
+```
+
+
+
+
+# 04. scatter plot of total copy number and active TE perc for TE class
+```{r}
+TE.length.active.perc <- read.csv("./06_fulllenTE/TElength.family.cutoff.activeperc.csv")
+head(TE.length.active.perc)
+
+TEclass.length.active.perc <- TE.length.active.perc %>% group_by(class) %>%
+  summarize(total.copynum = sum(total.copynum), active.copynum = sum(active.copynum)) %>%
+  mutate(active.perc = round(active.copynum / total.copynum *100, 3))
+write.csv(TEclass.length.active.perc, paste0("./06_fulllenTE/scatter.TElength.class.activeperc.csv"), row.names = F, quote = F)
+
+
+plot.df <- TEclass.length.active.perc %>% 
+  mutate(log10.total.copynum = log10(total.copynum+1),
+         log10.active.copynum = log10(active.copynum+1),
+         class = factor(class, levels = TEclass_order)) %>%
+  filter(active.perc > 0) # filter classes with active.perc > 0
+head(plot.df)
+
+
+## plot ##
+pdf(paste0("./06_fulllenTE/scatter.TElength.class.activeperc.pdf"), height = 4, width = 5)
+p <- ggplot(plot.df, aes(x = active.perc, y = log10.total.copynum, 
+                    size = log10.active.copynum, color = class)) +
+  geom_point(alpha = 0.7, stroke = 0) + 
+  geom_smooth(method = "lm", se = FALSE, show.legend = FALSE) +  # add fitted line
+  geom_text_repel(aes(label = class), size = 3) + # add label
+  scale_color_manual(values = genome_composition_col) + 
+  theme_classic()
+
+plot(p)
+dev.off()
+
+
+```
+
