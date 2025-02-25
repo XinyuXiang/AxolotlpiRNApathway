@@ -31,6 +31,6 @@ This pipeline outlines the steps to obtain TE consensus sequences and annotate t
    - Integrate the results from all three rounds to produce the final, comprehensive genome annotation.
 
 ## 3. Potential Active TE Annotation
-07 **Identify potential active TEs**
+07 **Identify Potential Active TEs**
    - Identify potential active TEs with length cutoff and percDiv cutoff.
 
