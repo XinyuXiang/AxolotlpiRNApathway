@@ -1,0 +1,567 @@
+---
+title: "03_seqmonk_plot, axolotl EM-seq"
+author: "Xinyu Xiang"
+date: "2024-07-15"
+output: html_document
+---
+
+```{r setup}
+knitr::opts_chunk$set(echo = TRUE)
+library(data.table)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(scales)
+library(ggpubr)
+library(ggrepel)
+library(RColorBrewer)
+library(scales)
+library(cowplot)
+library(ggExtra)
+library(stringr)
+library(ggrepel)
+library(ggrastr)
+```
+
+# 00. configure
+```{r}
+features <- c("genome","promoter2kb", "TSS", "gene", "exon", "intron", "CGI", "allTE", "activeTE", "activeTEpromoter")
+TEs <- c("DNA", "LINE", "LTR", "allOthers")
+
+type_order <- c("all", "TSS", "promoter", "exon", "TE", "others")
+TEclass_order <- c("LTR", "DNA", "LINE", "DIRS", "RC", "PLE", "SINE", "Simple_repeat", "Ngaro", "Low_complexity", "Satellite", "other", "unknown")
+
+cutoff.TSSDist <- c(-5000,5000)
+
+
+### set cutoff ###
+cutoff.met.min <- c(0,20,40,60,80)
+cutoff.met.max <- c(20,40,60,80,101)
+
+### set order ###
+MetGroup.order <- c("80_101", "60_80", "40_60", "20_40", "0_20")
+# Type.order <- c("genome.all", "CGI.all", "promoter","exon","DNA","LINE","LTR","SINE","otherTE","intergenic")
+
+
+### set color ###
+MetGroup.col <- c("0_20" = "#005f73", "20_40" = "#0a9396", "40_60" = "#94d2bd", "60_80" = "#ca6702", "80_101" = "#bb3e03")
+
+TEclass_col <- c(LTR  = "#9b2226", DNA  = "#ca6702", LINE  = "#007f5f", SINE  = "#4895ef", DIRS  = "#e9d8a6", Low_complexity  = "#b6ad90", Ngaro  = "#b9fbc0", PLE  = "#e7bc91", RC = "#dbcdf0", Satellite  = "#c5dedd", Simple_repeat  = "#8eecf5", other  = "#eddcd2", unknown  = "#d3d3d3")
+
+genome_composition_col <- c(genome  = "#cbb9c3", promoter2kb  = "#f4e285", TSS = "#f4a259", gene = "#ff6347", exon = "#5b8e7d", intron = "#f5f3f4", CGI = "#eb6424", allTE = "#bc4b51", activeTE = "#dda3a6")
+
+group_col <- c(all  = "#cbb9c3", CGI = "#eb6424")
+
+```
+
+
+# 01.1 TE and active TE bed, TE/TSS overlap with CGI
+```{r}
+## TE bed and active TE bed
+TE_bed <- read.delim(paste0("/datastore/home/s2215896/reference_AmexG_v6.0/AmexG_v6.0_TE_xinyu_anno/AmexG_v6.0-DD.TE.bed"), header = F, col.names = c("Chr", "Start", "End", "TE", "PercDiv", "Strand", "family", "class") )  %>% mutate(sample = "allTE")
+
+activeTE_bed <- read.delim(paste0("/datastore/home/s2215896/reference_AmexG_v6.0/AmexG_v6.0_TE_xinyu_anno/AmexG_v6.0-DD.TE.active.bed"), header = F, col.names = c("Chr", "Start", "End", "TE", "PercDiv", "Strand", "family", "class", "length") ) %>% mutate(sample = "activeTE")
+
+head(TE_bed)
+head(activeTE_bed)
+
+TEpromoter_bed <- TE_bed %>% mutate(
+        Start = if_else(Strand == "+", Start, End - 500),
+        End = if_else(Strand == "+", Start + 500, End)) %>%
+  select(-sample)
+activeTEpromoter_bed <- activeTE_bed %>% mutate(
+        Start = if_else(Strand == "+", Start, End - 500),
+        End = if_else(Strand == "+", Start + 500, End))
+
+
+## TE overlap with CGI
+TE_CGI.df <- read.delim(paste0("./07_CGI/02_CGI_anno/AmexG_v6.0-DD.TE.overlapCGI.bed"), header = F) %>% 
+  select(V1, V2, V3, V4, V5, V6, V7, V8) %>% rename("Chr" = "V1", "Start" = "V2", "End" = "V3", "TE" = "V4", "PercDiv" = "V5", "Strand" = "V6", "family" = "V7", "class" = "V8") %>% distinct()
+
+## TSS overlap with CGI
+TSS_CGI.df <- read.delim(paste0("./07_CGI/02_CGI_anno/AmexG_v6.0-DD.TSS.overlapCGI.bed"), header = F) %>% 
+  select(V7) %>% rename("Description" = "V7") %>% distinct()
+
+```
+
+
+# 01.2 Input and clean met data
+```{r}
+#### all genomic features ####
+feature.ls <- list()
+feature.melt.ls <- list()
+
+TE.ls <- list()
+TE.melt.ls <- list()
+
+feature.fulllen.clean.ls <- list()
+feature.fulllen.melt.ls <- list()
+
+### all ###
+for (i in 1) {
+  file_path <- "./08_seqmonk_xinyuTEanno/FeatureReport/ProbeReportforAllProbes.txt"
+  MeanMet_colname <- "AmexM.R1_val_1_bismark_bt2_pe.deduplicated.bismark.cov.gz"
+  
+  feature.ls[[i]] <- fread(file_path, select = MeanMet_colname) %>% 
+    rename("MeanMet" = MeanMet_colname) %>% 
+    mutate(Description = features[i],
+           MeanMet = round(MeanMet, 3))
+  feature.melt.ls[[i]] <- feature.ls[[i]] %>% drop_na %>% melt()
+}
+
+### intron ###
+for (i in 6) {
+  file_path <- "./08_seqmonk_xinyuTEanno/FeatureReport/ProbeReportforIntron.txt"
+  MeanMet_colname <- "AmexM.R1_val_1_bismark_bt2_pe.deduplicated.bismark.cov.gz"
+  
+  feature.ls[[i]] <- fread(file_path, select = MeanMet_colname) %>% 
+    rename("MeanMet" = MeanMet_colname) %>% 
+    mutate(Description = features[i],
+           MeanMet = round(MeanMet, 3))
+  feature.melt.ls[[i]] <- feature.ls[[i]] %>% drop_na %>% melt()
+}
+
+
+### promoter2kb, TSS, gene, exon, CGI ###
+for (i in c(2,3,4,5,7)) {
+  file_path <- paste0("./08_seqmonk_xinyuTEanno/FeatureReport/FeatureReport_", features[i], ".txt")
+  MeanMet_colname <- "Mean AmexM.R1_val_1_bismark_bt2_pe.deduplicated.bismark.cov.gz"
+  
+  feature.ls[[i]] <- fread(file_path, select = MeanMet_colname) %>% 
+    rename("MeanMet" = MeanMet_colname) %>% 
+    mutate(Description = features[i],
+           MeanMet = round(MeanMet, 3))
+  feature.melt.ls[[i]] <- feature.ls[[i]] %>% drop_na %>% melt()
+}
+
+### all TE features ###
+for (i in c(1,2,3,4)) {
+  file_path <- paste0("./08_seqmonk_xinyuTEanno/FeatureReport/FeatureReport_nonexon_", TEs[i], ".txt")
+  MeanMet_colname <- "Mean AmexM.R1_val_1_bismark_bt2_pe.deduplicated.bismark.cov.gz"
+  
+  TE.ls[[i]] <- fread(file_path, select = c(MeanMet_colname, "Description")) %>% 
+    rename("MeanMet" = MeanMet_colname) %>% 
+    mutate(MeanMet = round(MeanMet, 3))
+  TE.melt.ls[[i]] <- TE.ls[[i]] %>% drop_na %>% melt()
+}
+
+feature.ls[[8]] <- do.call(rbind, TE.ls) %>% mutate(Description = features[8])
+feature.melt.ls[[8]] <- do.call(rbind, TE.melt.ls) %>% mutate(Description = features[8])
+
+
+## TE features, by class ##
+TEfeature.df <- do.call(rbind, TE.ls) # keep Description as TE class
+TEfeature.melt.df <- do.call(rbind, TE.melt.ls)
+colnames(TEfeature.melt.df) <- c("features", "type", "methylation")
+write.csv(TEfeature.melt.df, paste0("./08_seqmonk_xinyuTEanno/BoxWhisker/Methylationlevel_allTE_byTEclass.csv"), quote = F, row.names = F)
+
+
+
+### active TE features ###
+for (i in c(1,2,3,4)) {
+  file_path <- paste0("./08_seqmonk_xinyuTEanno/FeatureReport/FeatureReport_nonexon_", TEs[i], ".txt")
+  MeanMet_colname <- "Mean AmexM.R1_val_1_bismark_bt2_pe.deduplicated.bismark.cov.gz"
+  
+  TE.ls[[i]] <- fread(file_path, select = c("Chr", "Start", "End", "Strand", MeanMet_colname, "Description")) %>% 
+    rename("MeanMet" = MeanMet_colname) %>% 
+    mutate(MeanMet = round(MeanMet, 3),
+           Chr = paste0("chr", Chr)) %>%
+    inner_join(select(activeTE_bed, Chr, Start, End, Strand), by = c("Chr", "Start", "End", "Strand")) %>% # filter active TE
+    select(-Chr, -Start, -End, -Strand)
+  TE.melt.ls[[i]] <- TE.ls[[i]] %>% drop_na %>% melt()
+}
+
+feature.ls[[9]] <- do.call(rbind, TE.ls) %>% mutate(Description = features[9])
+feature.melt.ls[[9]] <- do.call(rbind, TE.melt.ls) %>% mutate(Description = features[9])
+
+
+## active TE features, by class ##
+TEfeature.df <- do.call(rbind, TE.ls) # keep Description as TE class
+TEfeature.melt.df <- do.call(rbind, TE.melt.ls)
+colnames(TEfeature.melt.df) <- c("features", "type", "methylation")
+write.csv(TEfeature.melt.df, paste0("./08_seqmonk_xinyuTEanno/BoxWhisker/Methylationlevel_activeTE_byTEclass.csv"), quote = F, row.names = F)
+
+
+### active TE promoter features ###
+activeTEpromoter_bed <- activeTE_bed %>% mutate(
+        Start = if_else(Strand == "+", Start, End - 500),
+        End = if_else(Strand == "+", Start + 500, End))
+
+for (i in c(2,3)) {
+  file_path <- paste0("./08_seqmonk_xinyuTEanno/FeatureReport/FeatureReport_nonexon_TEpromoter_", TEs[i], ".txt")
+  MeanMet_colname <- "Mean AmexM.R1_val_1_bismark_bt2_pe.deduplicated.bismark.cov.gz"
+  
+  TE.ls[[i]] <- fread(file_path, select = c("Chr", "Start", "End", "Strand", MeanMet_colname)) %>% 
+    rename("MeanMet" = MeanMet_colname) %>% 
+    mutate(Description = TEs[i],
+           MeanMet = round(MeanMet, 3),
+           Chr = paste0("chr", Chr)) %>%
+    inner_join(select(activeTEpromoter_bed, Chr, Start, End, Strand), by = c("Chr", "Start", "End", "Strand")) %>% # filter active TE
+    select(-Chr, -Start, -End, -Strand)
+  TE.melt.ls[[i]] <- TE.ls[[i]] %>% drop_na %>% melt()
+}
+
+feature.ls[[10]] <- do.call(rbind, TE.ls) %>% mutate(Description = features[10])
+feature.melt.ls[[10]] <- do.call(rbind, TE.melt.ls) %>% mutate(Description = features[10])
+
+
+## active TE promoter features, by class ##
+TEfeature.df <- do.call(rbind, TE.ls) # keep Description as TE class
+TEfeature.melt.df <- do.call(rbind, TE.melt.ls)
+colnames(TEfeature.melt.df) <- c("features", "type", "methylation")
+write.csv(TEfeature.melt.df, paste0("./08_seqmonk_xinyuTEanno/BoxWhisker/Methylationlevel_activeTEpromoter_byTEclass.csv"), quote = F, row.names = F)
+
+
+
+### output all features ###
+for (i in 1:length(features)) {
+colnames(feature.melt.ls[[i]]) <- c("features", "type", "methylation")
+write.csv(feature.melt.ls[[i]], paste0("./08_seqmonk_xinyuTEanno/BoxWhisker/Methylationlevel_", features[i], ".csv"), quote = F, row.names = F)
+}
+
+
+
+```
+
+
+
+# 02. boxplot of met for genomic features and TE features
+```{r}
+### input data ###
+## genomic features
+feature.melt.ls <- list()
+for (i in 1:length(features)) {
+feature.melt.ls[[i]] <- read.csv(paste0("./08_seqmonk_xinyuTEanno/BoxWhisker/Methylationlevel_", features[i], ".csv"))
+}
+
+## all TE features
+allTEfeature.melt.df <- read.csv(paste0("./08_seqmonk_xinyuTEanno/BoxWhisker/Methylationlevel_allTE_byTEclass.csv"))
+
+## active TE features
+activeTEfeature.melt.df <- read.csv(paste0("./08_seqmonk_xinyuTEanno/BoxWhisker/Methylationlevel_activeTE_byTEclass.csv"))
+
+## active TE promoter features
+activeTEpromoterfeature.melt.df <- read.csv(paste0("./08_seqmonk_xinyuTEanno/BoxWhisker/Methylationlevel_activeTEpromoter_byTEclass.csv"))
+
+
+### plot ###
+## genomic features
+plot1.ls <- list()
+for (i in 1:length(features)) {
+plot1.ls[[i]] <- ggplot(feature.melt.ls[[i]], aes(x=features, y=methylation, fill=features)) +
+  scale_fill_manual(values = genome_composition_col[i]) + 
+  theme_classic() +
+  theme(legend.position="none") +
+    theme(axis.text.x = element_text(angle = 90), title=element_text(size=10)) +
+     stat_boxplot(geom ='errorbar', width = 0.3) +
+  coord_cartesian(ylim = c(0, 100)) +
+  geom_boxplot(outlier.shape=NA, width=0.6) + labs(y = "methylation level (%)") +
+  stat_summary(fun=mean, geom="point", shape=23, size=3, color="red")  # show mean
+
+}
+
+
+## TE features
+# all TE features
+allTEfeature.melt.df <- allTEfeature.melt.df %>% 
+  mutate(features = factor(features, levels = TEclass_order), 
+         type = "allTE")
+
+# active TE features
+activeTEfeature.melt.df <- activeTEfeature.melt.df %>% 
+  mutate(features = factor(features, levels = TEclass_order), 
+         type = "activeTE")
+
+# active TE promoter features
+activeTEpromoterfeature.melt.df <- activeTEpromoterfeature.melt.df %>% 
+  mutate(features = factor(features, levels = TEclass_order), 
+         type = "activeTEpromoter")
+
+TEfeature.melt.df <- rbind(allTEfeature.melt.df, activeTEfeature.melt.df, activeTEpromoterfeature.melt.df) %>%
+  mutate(type = factor(type, levels = c("allTE", "activeTE", "activeTEpromoter")))
+
+### statistics ###
+stats.bygroup <- TEfeature.melt.df %>%
+  group_by(features, type) %>%
+  summarise(
+    mean = mean(methylation, na.rm = TRUE),
+    median = median(methylation, na.rm = TRUE),
+    Q1 = quantile(methylation, 0.25, na.rm = TRUE), 
+    Q3 = quantile(methylation, 0.75, na.rm = TRUE), 
+    lower_whisker = max(min(methylation, na.rm = TRUE), Q1 - 1.5 * (Q3 - Q1)),  # 下须
+    upper_whisker = min(max(methylation, na.rm = TRUE), Q3 + 1.5 * (Q3 - Q1)),  # 上须
+    min = min(methylation, na.rm = TRUE),
+    max = max(methylation, na.rm = TRUE),
+    n = n(),  # 样本数量
+    .groups = "drop"  # 防止嵌套分组
+  )
+write.table(stats.bygroup, "./08_seqmonk_xinyuTEanno/BoxWhisker/boxplots.TE.features.statistics.txt", quote = F, sep = "\t", row.names = F)
+
+### t-test ###
+## allTE vs activeTE
+stats.all.df <- TEfeature.melt.df %>% filter(type %in% c("allTE", "activeTE")) %>%
+  summarise(features = "all",
+            p_value_allTEvsactiveTE = t.test(methylation ~ type, data = ., alternative = "two.sided")$p.value)
+
+stats.byclass.df <- TEfeature.melt.df  %>% filter(type %in% c("allTE", "activeTE"), features %in% c("LTR", "DNA", "LINE", "DIRS", "RC", "PLE")) %>%
+  group_by(features) %>%
+  summarise(p_value_allTEvsactiveTE = t.test(methylation ~ type, alternative = "two.sided")$p.value)
+
+stats.df <- rbind(stats.all.df, stats.byclass.df)
+write.table(stats.df, "./08_seqmonk_xinyuTEanno/BoxWhisker/boxplots.TE.features.ttest.allTEvsactiveTE.txt", quote = F, sep = "\t", row.names = F)
+
+## activeTE vs activeTEpromoter
+stats.byclass.df <- TEfeature.melt.df %>% 
+  filter(type %in% c("activeTE", "activeTEpromoter"), features %in% c("LTR", "LINE")) %>%
+  group_by(features) %>%
+  summarise(p_value_activeTEvsactiveTEpromoter = t.test(methylation ~ type, alternative = "two.sided")$p.value)
+
+write.table(stats.byclass.df, "./08_seqmonk_xinyuTEanno/BoxWhisker/boxplots.TE.features.ttest.activeTEvsactiveTEpromoter.txt", quote = F, sep = "\t", row.names = F)
+
+
+
+### plot TE ###
+plot.TE.df <- ggplot(TEfeature.melt.df, aes(x=type, y=methylation, fill=features)) +
+  scale_fill_manual(values = TEclass_col) + 
+  facet_grid( ~ features, scales = "free_x", space = "free_x") + # group by type
+  theme_classic() +
+  theme(legend.position="none",
+        axis.text.x = element_text(angle = 90), title=element_text(size=10)) +
+     stat_boxplot(geom ='errorbar', width = 0.3) +
+  coord_cartesian(ylim = c(0, 100)) +
+  geom_boxplot(outlier.shape=NA, width=0.6) + labs(y = "methylation level (%)") +
+  stat_summary(fun=mean, geom="point", shape=23, size=3, color="red")  # show mean
+
+
+## plot boxplot
+pdf("./08_seqmonk_xinyuTEanno/BoxWhisker/boxplots.genome.features.pdf", width = 16, height = 3)
+plot_grid(plot1.ls[[1]], plot1.ls[[2]], plot1.ls[[3]], plot1.ls[[4]], plot1.ls[[5]], 
+          plot1.ls[[6]], plot1.ls[[7]], plot1.ls[[8]], plot1.ls[[9]], ncol = 12, nrow = 1)
+dev.off()
+
+pdf("./08_seqmonk_xinyuTEanno/BoxWhisker/boxplots.TE.features.v2.pdf", width = 16, height = 10)
+plot_grid(plot.TE.df) # for all TE and active TE
+dev.off()
+
+
+```
+
+
+# 03. plot quantification trend plot
+```{r}
+# element_list = c("gene", "CGI", "allTE", "activeTE")
+element_list = c("LINE-L1-active", "LINE-L1-all", "LINE-RTE-active", "LINE-RTE-all", 
+                 "LTR-ERV1-active", "LTR-ERV1-all", "LTR-Gypsy-active", "LTR-Gypsy-all")
+
+for (element in element_list) {
+  ### input data
+  data.df <- read.csv(file = paste0("./08_seqmonk_xinyuTEanno/QuantificationTrend/QuantificationTrend_", element, ".txt"),sep= "\t", header = TRUE, row.names = NULL ,  
+  colClasses = c("character", "numeric", "logical", "numeric"))
+  colnames(data.df) <- c("row.names", "region", "bin", element)
+  head(data.df)
+
+  ### adjust data structure
+  data.df <- data.df %>% mutate( continuous = case_when(row.names == "upstream" ~ region+0, 
+  row.names == "central" ~ region+200, row.names == "downstream" ~ region+400, TRUE ~ as.double(region))) %>% melt(id.vars = c("row.names", "region", "continuous"), 
+  measure.vars = c(4:ncol(data.df)), variable.name = "Element")
+  table(data.df$Element)
+  data.df$Element <-  gsub("^.*\\.\\.\\.(.*)", "\\1", data.df$Element)
+  data.df$value <- as.numeric(data.df$value)
+  glimpse(data.df)
+  table(data.df$Element)
+
+  ### plot metaplot
+  fillings <- c(Element = "#6c757d")
+  
+  ggplot(data = data.df, aes (x = continuous)) +
+    geom_line(aes(y = value, group = Element, colour = Element), linewidth = 1) +
+    #geom_smooth(aes(y = value, group = Element, colour = Element, fill = Element, alpha = 0.6), method = "auto", span = 0.02) +
+    #geom_smooth(aes(y = value, group = Element, colour = Element, fill = Element, alpha = 0.6), method = "loess", span = 0.05, formula = y ~ x, se = FALSE, alpha = 0.4, linewidth = 2 ) +
+    scale_fill_manual(values = fillings) +
+    scale_colour_manual(values = fillings) +
+    ggtitle(element) +
+    # coord_cartesian(ylim = c(0,100)) +
+    coord_cartesian(ylim = c(0, 100), xlim = c(160,440)) +
+    labs(x = "", y = "CpG methylation%") +
+
+    scale_y_continuous(expand = c(0, 0), breaks = pretty_breaks(n=4)) +
+    theme_bw() +
+    theme(panel.grid.major=element_blank(),panel.grid.minor=element_blank()) + 
+    theme(legend.position = "right", axis.text.x = element_blank(), axis.line.x = element_line(), axis.ticks.x = element_blank()) +
+    geom_vline(xintercept = 200) +
+    geom_vline(xintercept = 400)
+
+  ggsave(filename = paste0("./08_seqmonk_xinyuTEanno/QuantificationTrend/QuantificationTrend_scaled_", element, ".v2.pdf"), scale=1, width=15, height=10, units = "cm")
+
+}
+
+
+```
+
+
+
+# 04. plot barplot of met level for genome / CGI
+```{r}
+genome.met <- read.csv(paste0("./08_seqmonk_xinyuTEanno/BoxWhisker/Methylationlevel_genome.csv"))
+CGI.met <- read.csv(paste0("./08_seqmonk_xinyuTEanno/BoxWhisker/Methylationlevel_CGI.csv"))
+
+### classify met group ###
+genome.met.level.ls <- list()
+for (i in 1:length(cutoff.met.min)){
+  genome.met.level.ls[[i]] <- genome.met %>% filter(methylation >= cutoff.met.min[i], methylation < cutoff.met.max[i]) %>% 
+    mutate(MetGroup = paste0(cutoff.met.min[i], "_", cutoff.met.max[i]))
+}
+
+CGI.met.level.ls <- list()
+for (i in 1:length(cutoff.met.min)){
+  CGI.met.level.ls[[i]] <- CGI.met %>% filter(methylation >= cutoff.met.min[i], methylation < cutoff.met.max[i]) %>% 
+    mutate(MetGroup = paste0(cutoff.met.min[i], "_", cutoff.met.max[i]))
+}
+
+### calculate number & proprotion of each met group ###
+genome.met.level.df <- do.call(rbind, genome.met.level.ls) %>% 
+  group_by(MetGroup) %>% 
+  summarise(numsum = n()) %>% 
+  mutate(perc = round( (100*numsum/sum(numsum)) ,3) ) %>% 
+  mutate(type = "genome")
+
+CGI.met.level.df <- do.call(rbind, CGI.met.level.ls) %>% 
+  group_by(MetGroup) %>% 
+  summarise(numsum = n()) %>% 
+  mutate(perc = round( (100*numsum/sum(numsum)) ,3) ) %>% 
+  mutate(type = "CGI")
+
+
+plot.df <- bind_rows(genome.met.level.df, CGI.met.level.df) %>% 
+  mutate(MetGroup = factor(MetGroup, levels = MetGroup.order), 
+         type = factor(type, levels = c("genome", "CGI")),
+         MetGrouplabel = paste0(MetGroup, ", ", perc, "%")  )
+write.csv(plot.df, "./08_seqmonk_xinyuTEanno/barplot_metgroup/barplot_metgroup_genome_CGI.csv", quote = F, row.names = F)
+
+
+### Chi-squared Test for each type ###
+# region sum
+total_genome <- sum(plot.df$numsum[plot.df$type == "genome"])
+total_CGI <- sum(plot.df$numsum[plot.df$type == "CGI"])
+
+# Chi-squared Test
+chisq_test.df <- plot.df %>%
+  group_by(MetGroup) %>%
+  summarise(
+    CGI_count = sum(numsum[type == "CGI"]),
+    genome_count = sum(numsum[type == "genome"]),
+    total_CGI = total_CGI,
+    total_genome = total_genome,
+    p_value = {
+      observed <- matrix(c(CGI_count, total_CGI - CGI_count, genome_count, total_genome - genome_count), nrow = 2, byrow = TRUE)
+      chisq_test <- chisq.test(observed)
+      chisq_test$p.value
+    }
+  )
+write.table(chisq_test.df, "./08_seqmonk_xinyuTEanno/barplot_metgroup/barplot_metgroup_genome_CGI_chisqtest.txt", quote = F, sep = "\t", row.names = F)
+
+
+### plot stacked barplot of met group proportion ###
+# add significance
+significance_80_101_label <- paste0("80_101 p-value ", round(chisq_test.df$p_value[chisq_test.df$MetGroup=="80_101"],2))
+
+pdf(paste0("./08_seqmonk_xinyuTEanno/barplot_metgroup/barplot_metgroup_genome_CGI.pdf"), height = 3, width = 3)
+# normalize to proportion
+p1 <- ggplot(data=plot.df, aes(x=type, y=numsum, fill=MetGroup)) + 
+  geom_bar(colour = NA, stat = "identity", position = "fill", width = 0.8) + 
+  theme_classic(base_size = 6) + scale_fill_manual(values = MetGroup.col) +
+  theme(axis.text.x = element_text(angle = 90)) + 
+  scale_y_continuous(expand = c(0,0)) +
+  labs(x = "", y = "Proportion (%)", title = "Methylationlevel Composition") +
+  geom_text(aes(label = MetGrouplabel), 
+            position = position_fill(vjust = 0.5), size = 2) +
+  annotate("text", x = 2, y = 0.9, label = significance_80_101_label, size = 2)
+plot(p1)
+dev.off()
+
+
+```
+
+
+
+# 05. boxplot of met level, TSS/TE overlap with CGI vs the rest
+```{r}
+### input TSS/TE met ###
+## all TSS met ##
+  file_path <- paste0("./08_seqmonk_xinyuTEanno/FeatureReport/FeatureReport_TSS.txt")
+  MeanMet_colname <- "Mean AmexM.R1_val_1_bismark_bt2_pe.deduplicated.bismark.cov.gz"
+TSS.met.df <- fread(file_path, select = c("Description", MeanMet_colname)) %>% 
+    rename("MeanMet" = MeanMet_colname) %>% 
+    mutate(MeanMet = round(MeanMet, 3),
+           group = "all",
+           condition = "TSS")
+
+## all TSS overlap CGI met ##
+TSS.CGI.met.df <- TSS.met.df %>%
+  mutate(Description = str_replace_all(Description, '"', '')) %>%
+  inner_join( mutate(TSS_CGI.df, Description = str_trim(Description, side = "right")) ) %>% # filter TSS overlap with CGI
+  mutate(MeanMet = round(MeanMet, 3),
+         group = "CGI",
+         condition = "TSS") 
+
+
+## all TE met ##
+TE.ls <- list()
+for (i in c(1,2,3,4)) {
+  file_path <- paste0("./08_seqmonk_xinyuTEanno/FeatureReport/FeatureReport_nonexon_", TEs[i], ".txt")
+  MeanMet_colname <- "Mean AmexM.R1_val_1_bismark_bt2_pe.deduplicated.bismark.cov.gz"
+  
+  TE.ls[[i]] <- fread(file_path, select = c("Chr", "Start", "End", "Strand", MeanMet_colname, "Description")) %>% 
+    rename("MeanMet" = MeanMet_colname) %>% 
+    mutate(MeanMet = round(MeanMet, 3),
+           Chr = paste0("chr", Chr))
+}
+TE.met.df <- do.call(rbind, TE.ls) %>% 
+  mutate(group = "all",
+         condition = "TE")
+
+## all TE overlap CGI met ##
+TE.CGI.met.df <- TE.met.df %>% 
+  inner_join(select(TE_CGI.df, Chr, Start, End, Strand)) %>% # filter TE overlap with CGI
+    mutate(group = "CGI",
+           condition = "TE")
+
+
+### plot boxplot met level over all TSS/CGI TSS/all TE/CGI TE ###
+
+plot.df <- bind_rows(TSS.met.df, TSS.CGI.met.df, 
+                     select(TE.met.df, colnames(TSS.met.df)), select(TE.CGI.met.df, colnames(TSS.met.df))) %>%
+  mutate(group = factor(group, levels = c("all", "CGI")),
+         condition = factor(condition, levels = c("TSS", "TE")))
+
+write.table(plot.df, "./08_seqmonk_xinyuTEanno/boxplot_TSSTE_met/boxplot_TSSTE_met.txt", quote = F, sep = "\t", row.names = F)
+
+
+pdf(paste0("./08_seqmonk_xinyuTEanno/boxplot_TSSTE_met/boxplot_TSSTE_met.pdf"), height = 4, width = 4)
+p1 <- ggplot(plot.df, aes(x=group, y=MeanMet, color=group)) +
+  scale_color_manual(values = group_col) + 
+  facet_grid(~condition) + # group by type
+     stat_boxplot(geom ='errorbar', width = 0.3) +
+  theme_classic() +
+  coord_cartesian(ylim = c(0, 100)) +
+  geom_boxplot(outlier.shape=NA, width=0.6) + 
+  stat_compare_means(method = "t.test") +
+  labs(y = "methylation level (%)")
+
+
+plot(p1)
+dev.off()
+
+
+
+
+
+
+```
+
+
+
+# 06. violin plot of met level, TE overlap with CGI vs the rest, by TE class
+see 06_CGI_plot.Rmd
+
+

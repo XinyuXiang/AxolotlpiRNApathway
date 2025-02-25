@@ -1,0 +1,78 @@
+---
+title: "05_CGI_filter.Rmd"
+author: "Xinyu Xiang"
+date: "2024-07-15"
+output: html_document
+---
+
+```{r setup}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(dplyr)
+
+```
+
+# 01 CpG island identification & filtering
+```{r}
+##### filtering criteria #####
+# The first method for the identification of the CGIs in the DNA sequences has been developed by Gardiner-Garden and Frommer (GGF), used by UCSC
+# - GC content of 50% or greater
+# - length greater than 200 bp
+# - ratio greater than 0.6 of observed number of CG dinucleotides to the expected number on the basis of the number of Gs and Cs in the segment
+
+# The CpG count is the number of CG dinucleotides in the island. The Percentage CpG is the ratio of CpG nucleotide bases (twice the CpG count) to the length. The ratio of observed to expected CpG is calculated according to the formula (cited in Gardiner-Garden et al. (1987)):
+# Obs/Exp CpG = Number of CpG * N / (Number of C * Number of G)
+# N = length of sequence.
+
+##### clean data #####
+data.df <- read.delim(paste0("./07_CGI/01_gcluster/AmexG_v6.0-DD_CG/cluster.txt"), sep="\t", stringsAsFactors = FALSE, header = T)
+table(data.df$chrom)
+summary(data.df)
+# > summary(data.df)
+#     chrom             chromStart           chromEnd              id                 len             count               gc               oe              den         
+#  Length:2325525     Min.   :1.275e+03   Min.   :1.325e+03   Length:2325525     Min.   :  10.0   Min.   :   5.00   Min.   :0.3746   Min.   :0.4933   Min.   :0.05648  
+#  Class :character   1st Qu.:2.413e+08   1st Qu.:2.413e+08   Class :character   1st Qu.:  73.0   1st Qu.:  11.00   1st Qu.:0.5981   1st Qu.:1.2656   1st Qu.:0.12418  
+#  Mode  :character   Median :5.228e+08   Median :5.228e+08   Mode  :character   Median : 103.0   Median :  14.00   Median :0.6410   Median :1.4187   Median :0.14118  
+#                     Mean   :5.766e+08   Mean   :5.766e+08                      Mean   : 125.4   Mean   :  16.88   Mean   :0.6492   Mean   :1.4644   Mean   :0.15087  
+#                     3rd Qu.:8.640e+08   3rd Qu.:8.640e+08                      3rd Qu.: 145.0   3rd Qu.:  18.00   3rd Qu.:0.6912   3rd Qu.:1.6233   3rd Qu.:0.16514  
+#                     Max.   :1.627e+09   Max.   :1.627e+09                      Max.   :6543.0   Max.   :1021.00   Max.   :1.0000   Max.   :5.0000   Max.   :0.50000  
+#      pvalue            logpvalue       
+#  Min.   :0.000e+00   Min.   :-315.951  
+#  1st Qu.:2.217e-09   1st Qu.:  -8.654  
+#  Median :2.110e-07   Median :  -6.676  
+#  Mean   :1.654e-06   Mean   :  -8.030  
+#  3rd Qu.:2.433e-06   3rd Qu.:  -5.614  
+#  Max.   :9.998e-06   Max.   :  -5.000  
+
+CGI.df <- data.df %>% filter(gc >= 0.5, len >= 200, oe >= 0.6, pvalue <= 1e-05) %>% # filter with criteria
+  mutate(gc = round(gc, 3), oe = round(oe, 3), den = round(den, 3), 
+         pvalue = format(pvalue, digits = 4, scientific = TRUE), 
+         logpvalue = round(logpvalue, 3)) %>% # keep 3 decimal places
+  rename("Chr" = "chrom", "Start" = "chromStart", "End" = "chromEnd") %>% #rename
+  arrange(Chr, Start, End) # sort
+head(CGI.df)
+
+nrow(CGI.df) # 248988
+summary(CGI.df)
+ #    chrom             chromStart           chromEnd              id                 len             count        
+ # Length:248988      Min.   :2.415e+03   Min.   :2.784e+03   Length:248988      Min.   : 200.0   Min.   :  18.00  
+ # Class :character   1st Qu.:2.561e+08   1st Qu.:2.561e+08   Class :character   1st Qu.: 232.0   1st Qu.:  27.00  
+ # Mode  :character   Median :5.372e+08   Median :5.372e+08   Mode  :character   Median : 271.0   Median :  33.00  
+ #                    Mean   :5.846e+08   Mean   :5.846e+08                      Mean   : 341.4   Mean   :  39.73  
+ #                    3rd Qu.:8.667e+08   3rd Qu.:8.667e+08                      3rd Qu.: 342.0   3rd Qu.:  41.00  
+ #                    Max.   :1.627e+09   Max.   :1.627e+09                      Max.   :6543.0   Max.   :1021.00  
+ #       gc               oe              den              pvalue            logpvalue      
+ # Min.   :0.5000   Min.   :0.6027   Min.   :0.05648   Min.   :0.000e+00   Min.   :-315.95  
+ # 1st Qu.:0.5686   1st Qu.:1.2597   1st Qu.:0.10571   1st Qu.:0.000e+00   1st Qu.: -17.71  
+ # Median :0.5941   Median :1.3499   Median :0.11684   Median :0.000e+00   Median : -13.78  
+ # Mean   :0.5995   Mean   :1.3738   Mean   :0.11785   Mean   :5.731e-08   Mean   : -16.19  
+ # 3rd Qu.:0.6207   3rd Qu.:1.4844   3rd Qu.:0.12613   3rd Qu.:2.300e-11   3rd Qu.: -10.65  
+ # Max.   :0.8740   Max.   :2.9583   Max.   :0.26047   Max.   :9.998e-06   Max.   :  -5.00  
+
+
+
+write.table(CGI.df, paste0("./07_CGI/01_gcluster_CGI/AmexG_v6.0-DD_CGI.bed"), quote = FALSE, row.names = FALSE, col.names = FALSE, sep = "\t")
+write(paste(colnames(CGI.df), collapse = "\t"), file = "./07_CGI/01_gcluster_CGI/AmexG_v6.0-DD_CGI.header.txt")
+
+```
+

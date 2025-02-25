@@ -1,0 +1,638 @@
+---
+title: "06_CGI_plot"
+author: "Xinyu Xiang"
+date: "2024-07-15"
+output: html_document
+---
+
+```{r setup}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(dplyr)
+library(ggplot2)
+library(scales)
+library(ggpubr)
+library(reshape2)
+library(gghalves)
+
+
+```
+
+# 00. configure
+```{r}
+### set cutoff ###
+cutoff.TSSDist <- c(-5000,5000)
+
+### set order ###
+type_order <- c("all", "TSS", "promoter", "exon", "TE", "others")
+TEclass_order <- c("LTR", "DNA", "LINE", "DIRS", "RC", "PLE", "SINE", "Simple_repeat", "Ngaro", "Low_complexity", "Satellite", "other", "unknown")
+
+### set color ###
+type_col <- c(all = "#eb6424", TSS = "#f4a259", promoter = "#f4e285", exon = "#5b8e7d", TE = "#bc4b51", others = "#f5f3f4")
+sample_col <- c(CGI = "#eb6424", shuf = "#c9c9ae", allTE = "#c9c9ae")
+TEclass_col <- c(LTR  = "#9b2226", DNA  = "#ca6702", LINE  = "#007f5f", SINE  = "#4895ef", DIRS  = "#e9d8a6", Low_complexity  = "#b6ad90", Ngaro  = "#b9fbc0", PLE  = "#e7bc91", RC = "#dbcdf0", Satellite  = "#c5dedd", Simple_repeat  = "#8eecf5", other  = "#eddcd2", unknown  = "#d3d3d3")
+
+
+```
+
+# 01. input CGI; CGI met level ; TE overlap with CGI; TE and active TE bed
+```{r}
+## CGI with anno
+CGI.colnames <- scan("./07_CGI/01_gcluster_CGI/AmexG_v6.0-DD_CGI.header.txt", what = "", sep = "\t")
+CGI.colnames <- c(CGI.colnames, "type")
+shuf.colnames <- c(CGI.colnames[1:3], "type")
+
+CGI.df <- read.delim(paste0("./07_CGI/02_CGI_anno/AmexG_v6.0-DD_CGI.classified.bed"), header = F, col.names = CGI.colnames) %>%
+  mutate(sample = "CGI")
+shuf.df <- read.delim(paste0("./07_CGI/02_CGI_anno/AmexG_v6.0-DD_CGI.shuf.classified.bed"), header = F, col.names = shuf.colnames) %>%
+  mutate(sample = "shuf")
+
+## CGI met level
+CGI.met.df <- read.delim(paste0("./08_seqmonk/FeatureReport/FeatureReport_CGI.txt")) %>%
+  mutate(Chr = paste0("chr", Chr),
+         MeanMet = round(Mean.AmexM.srt.deduplicated.bismark.cov.gz, 3)) %>%
+  select(Chr, Start, End, MeanMet)
+CGI.met.df <- CGI.met.df %>% left_join(CGI.df)
+head(CGI.met.df)
+
+## TE overlap with CGI
+TE_CGI.df <- read.delim(paste0("./07_CGI/02_CGI_anno/AmexG_v6.0-DD.TE.overlapCGI.bed"), header = F) %>% 
+  select(V1, V2, V3, V4, V5, V7, V8) %>% rename("Chr" = "V1", "Start" = "V2", "End" = "V3", "TE" = "V4", "PercDiv" = "V5", "family" = "V7", "class" = "V8") %>% distinct() %>% 
+  mutate(sample = "CGI")
+TE_shuf.df <- read.delim(paste0("./07_CGI/02_CGI_anno/AmexG_v6.0-DD.TE.overlapCGI.shuf.bed"), header = F) %>% 
+  select(V1, V2, V3, V4, V5, V7, V8) %>% rename("Chr" = "V1", "Start" = "V2", "End" = "V3", "TE" = "V4", "PercDiv" = "V5", "family" = "V7", "class" = "V8") %>% distinct() %>% 
+  mutate(sample = "shuf")
+head(TE_CGI.df)
+head(TE_shuf.df)
+
+## TE bed and active TE bed
+TE_bed <- read.delim(paste0("/datastore/home/s2215896/reference_AmexG_v6.0/AmexG_v6.0_TE_xinyu_anno/AmexG_v6.0-DD.TE.bed"), header = F)
+TE_bed <- TE_bed %>% select(V4, V5, V7, V8) %>% rename("TE" = "V4", "PercDiv" = "V5", "family" = "V7", "class" = "V8") %>% mutate(sample = "allTE")
+
+activeTE_bed <- read.delim(paste0("/datastore/home/s2215896/reference_AmexG_v6.0/AmexG_v6.0_TE_xinyu_anno/AmexG_v6.0-DD.TE.active.bed"), header = F, col.names = c("Chr", "Start", "End", "TE", "PercDiv", "Strand", "family", "class", "length") ) %>% mutate(sample = "activeTE")
+
+head(TE_bed)
+head(activeTE_bed)
+```
+
+
+# 02. histogram of length distribution for CpG islands
+```{r}
+# lines for length cutoffs
+vlines <- c(log10(300), log10(500), log10(1000), log10(3000))
+
+len.numsum <- CGI.df %>%
+  summarise(len300 = sum(len <= 300),
+            len500 = sum(len <= 500),
+            len1000 = sum(len <= 1000),
+            len3000 = sum(len <= 3000))
+
+len.perc <- data.frame(
+  type = colnames(len.numsum),
+  CGI_count = as.numeric(len.numsum[1,]),
+  total_CGI = nrow(CGI.df)) %>% 
+  mutate(len.perc = round(CGI_count / total_CGI *100, 2),
+         label = paste0(type, ", ", len.perc, "%") )
+write.table(len.perc, "./07_CGI/03_CGI_plot/histogram_CGI_length_distribution.txt", quote = F, sep = "\t", row.names = F)
+
+
+pdf(paste0("./07_CGI/03_CGI_plot/histogram_CGI_length_distribution.pdf"), height = 2, width = 3)
+p <- ggplot(CGI.df, aes(x = log10(len))) +
+  geom_histogram(bins = 50, fill = sample_col["CGI"], alpha = 0.75, position = "identity") +
+  labs(title = "Length distribution for CpG islands", x = "log10(Length)", y = "Frequency") +
+  theme_minimal() +
+  theme(
+    text = element_text(size = 6),
+    panel.background = element_blank(),
+    panel.grid.minor.y = element_blank(), 
+    panel.grid.minor.x = element_blank() 
+  ) +
+  geom_vline(xintercept = vlines, linetype = "dashed", color = "grey") +
+  annotate("text", x = vlines, y = 20000, label = len.perc$label, size = 1)
+
+plot(p)
+dev.off()
+
+```
+
+
+
+# 03. barplot/piechart of annotation for CpG islands
+```{r}
+CGI.anno.df <- CGI.df %>% group_by(type, sample) %>% 
+  summarize(numsum = n()) %>% # CGI region number for annotated types
+  ungroup() %>%
+  mutate(perc = round(numsum / sum(numsum) * 100, 2),
+         typelabel = paste0(type, ", ", perc, "%"))
+         
+shuf.anno.df <- shuf.df %>% group_by(type, sample) %>% 
+  summarize(numsum = n()) %>% # shuffle region number for annotated types
+  ungroup() %>%
+  mutate(perc = round(numsum / sum(numsum) * 100, 2),
+         typelabel = paste0(type, ", ", perc, "%"))
+
+anno.df <- rbind(CGI.anno.df, shuf.anno.df) %>% 
+  mutate(type = factor(type, levels = type_order),
+         sample = factor(sample, levels = c("CGI", "shuf")) )
+
+write.table(anno.df, "./07_CGI/03_CGI_plot/barplot_CGI_anno.txt", quote = F, sep = "\t", row.names = F)
+anno.df <- read.delim("./07_CGI/03_CGI_plot/barplot_CGI_anno.txt") %>% 
+  mutate(type = factor(type, levels = type_order),
+         sample = factor(sample, levels = c("CGI", "shuf")) )
+
+## Chi-squared Test for each type
+# region sum
+total_CGI <- sum(anno.df$numsum[anno.df$sample == "CGI"])
+total_shuf <- sum(anno.df$numsum[anno.df$sample == "shuf"])
+
+# Chi-squared Test
+chisq_test.df <- anno.df %>%
+  group_by(type) %>%
+  summarise(
+    CGI_count = sum(numsum[sample == "CGI"]),
+    shuf_count = sum(numsum[sample == "shuf"]),
+    total_CGI = total_CGI,
+    total_shuf = total_shuf,
+    p_value = {
+      observed <- matrix(c(CGI_count, total_CGI - CGI_count, shuf_count, total_shuf - shuf_count), nrow = 2, byrow = TRUE)
+      chisq_test <- chisq.test(observed)
+      chisq_test$p.value
+    }
+  )
+write.table(chisq_test.df, "./07_CGI/03_CGI_plot/barplot_CGI_anno_chisqtest.txt", quote = F, sep = "\t", row.names = F)
+
+
+## plot barplot and add significance
+TE_significance_label <- paste0("TE p-value ", round(chisq_test.df$p_value[chisq_test.df$type=="TE"],2))
+TSS_significance_label <- paste0("TSS p-value ", round(chisq_test.df$p_value[chisq_test.df$type=="TSS"],2))
+
+pdf(paste0("./07_CGI/03_CGI_plot/barplot_CGI_anno.pdf"), height = 3, width = 3)
+# normalize to proportion
+p1 <- ggplot(data=anno.df, aes(x=sample, y=numsum, fill=type)) + 
+  geom_bar(colour = NA, stat = "identity", position = "fill", width = 0.8) + 
+  theme_classic(base_size = 6) + scale_fill_manual(values = type_col) +
+  theme(axis.text.x = element_text(angle = 90)) + 
+  scale_y_continuous(expand = c(0,0)) +
+  labs(x = "", y = "Proportion (%)", title = "Composition") +
+  geom_text(aes(label = typelabel), 
+            position = position_fill(vjust = 0.5), size = 2) +
+  annotate("text", x = 2, y = 0.75, label = TE_significance_label, size = 2) +
+  annotate("text", x = 2, y = 0.8, label = TSS_significance_label, size = 2)
+plot(p1)
+dev.off()
+
+
+pdf(paste0("./07_CGI/03_CGI_plot/piechart_CGI_anno.pdf"), height = 3, width = 3)
+# normalize to proportion
+p1 <- ggplot(data=anno.df, aes(x="", y=numsum, fill=type)) + 
+  geom_bar(stat="identity", width=1) +
+  coord_polar("y", start=0) + 
+  theme_classic(base_size = 6) + 
+  scale_fill_manual(values = type_col) +
+  theme(axis.text.x = element_blank(), 
+        axis.ticks = element_blank(), 
+        axis.line = element_blank()) + 
+  labs(x = "", y = "Proportion (%)", title = "Composition") +
+  geom_text(aes(label = typelabel), position = position_stack(vjust = 0.5), size = 2) +
+  facet_wrap(~ sample) + 
+  annotate("text", x = 0.5, y = 0.5, label = TE_significance_label, size = 2) +
+  annotate("text", x = 0.7, y = 0.7, label = TSS_significance_label, size = 2)
+  
+plot(p1)
+dev.off()
+
+```
+
+
+
+
+# 04. frequency histogram of CGI distance to TSS
+```{r}
+### get TSS and TSS window ###
+gene.gtf <- read.delim("/datastore/home/s2215896/reference_AmexG_v6.0/genome_element/AmexT_v47-AmexG_v6.0-DD.gene.gtf", header = F, col.names = c("Chr", "Source", "Feature", "Start", "End", "Score","Strand","Frame","Attribute"))
+
+# filter
+cutoff.window <- 1000000
+TSS.df <- gene.gtf %>% mutate(TSS.Start = case_when(Strand == "+" ~ Start, 
+                                              Strand == "-" ~ End)) %>% 
+  rename("TSS.Chr" = "Chr", "TSS.Strand" = "Strand", "TSS.Attribute" = "Attribute") %>% 
+  mutate(Window.Start = TSS.Start - cutoff.window, Window.End = TSS.Start + cutoff.window) %>%
+  mutate(Window.Start = case_when(Window.Start < 0 ~ 0,
+                                 TRUE ~ Window.Start)) %>%
+  select(TSS.Chr, Window.Start, Window.End, TSS.Attribute, TSS.Start, TSS.Strand)
+  
+head(TSS.df)
+dim(TSS.df) # 56812     6
+write.table(TSS.df, paste0("./07_CGI/02_TSSDistToCGI/AmexT_v47-AmexG_v6.0-DD.TSS.bed"), quote = F, row.names = F, col.names = F, sep = "\t")
+
+
+### get overlap of all CGI/shuffle with TSS window ###
+system("/datastore/homes3/s2215896/biosoft/bedtools2/bin/bedtools intersect \\
+       -a ./07_CGI/02_TSSDistToCGI/AmexT_v47-AmexG_v6.0-DD.TSS.bed \\
+       -b ./07_CGI/02_CGI_anno/AmexG_v6.0-DD_CGI.classified.bed \\
+       -wa -wb \\
+       > ./07_CGI/02_TSSDistToCGI/AmexT_v47-AmexG_v6.0-DD.TSS.inter.CGI.bed")
+
+system("/datastore/homes3/s2215896/biosoft/bedtools2/bin/bedtools intersect \\
+       -a ./07_CGI/02_TSSDistToCGI/AmexT_v47-AmexG_v6.0-DD.TSS.bed \\
+       -b ./07_CGI/02_CGI_anno/AmexG_v6.0-DD_CGI.shuf.classified.bed \\
+       -wa -wb \\
+       > ./07_CGI/02_TSSDistToCGI/AmexT_v47-AmexG_v6.0-DD.TSS.inter.shuf.bed")
+
+
+### calculate distance between CGI/shuffle and TSS ###
+# CGI
+TSS.inter.CGI.df <- read.delim("./07_CGI/02_TSSDistToCGI/AmexT_v47-AmexG_v6.0-DD.TSS.inter.CGI.bed", header = F, col.names =  c(colnames(TSS.df), colnames(CGI.df)) )
+
+TSS.inter.CGI.df <- TSS.inter.CGI.df %>% mutate(Start = as.numeric(Start), End = as.numeric(End), 
+                                                sample = "CGI",
+                                                Midpoint = round((Start + End)*0.5), 
+                                                DistToTSS = Midpoint - TSS.Start)
+dim(TSS.inter.CGI.df) # 992680     21
+write.csv(TSS.inter.CGI.df, paste0("./07_CGI/02_TSSDistToCGI/DistToTSS.CGI.csv"), quote = F, row.names = F)
+
+# > head(TSS.inter.CGI.df)
+#   TSS.Chr Window.Start Window.End                                              TSS.Attribute TSS.Start TSS.Strand    Chr  Start
+# 1  chr10p            0    1313039 gene_id AMEX60DD000001; gene_name ZFP37 [nr]|ZNF568 [hs];     313039          + chr10p  11793
+# 2  chr10p            0    1313039 gene_id AMEX60DD000001; gene_name ZFP37 [nr]|ZNF568 [hs];     313039          + chr10p 287309
+# 3  chr10p            0    1313039 gene_id AMEX60DD000001; gene_name ZFP37 [nr]|ZNF568 [hs];     313039          + chr10p 458851
+# 4  chr10p            0    1313039 gene_id AMEX60DD000001; gene_name ZFP37 [nr]|ZNF568 [hs];     313039          + chr10p 580167
+# 5  chr10p            0    1313039 gene_id AMEX60DD000001; gene_name ZFP37 [nr]|ZNF568 [hs];     313039          + chr10p 628899
+# 6  chr10p            0    1313039 gene_id AMEX60DD000001; gene_name ZFP37 [nr]|ZNF568 [hs];     313039          + chr10p 629633
+#      End            id len count    gc    oe   den    pvalue logpvalue   type sample Midpoint DistToTSS
+# 1  12693  chr10p_11793 901    92 0.537 1.537 0.102 2.300e-32   -31.638     TE    CGI    12243   -300796
+# 2 287569 chr10p_287309 261    24 0.736 0.717 0.092 3.556e-08    -7.449 others    CGI   287439    -25600
+# 3 459233 chr10p_458851 383    37 0.559 1.329 0.097 8.242e-13   -12.084     TE    CGI   459042    146003
+# 4 580781 chr10p_580167 615    60 0.558 1.350 0.098 2.150e-20   -19.668     TE    CGI   580474    267435
+# 5 629107 chr10p_628899 209    32 0.641 1.490 0.153 1.544e-17   -16.811     TE    CGI   629003    315964
+# 6 630458 chr10p_629633 826    98 0.610 1.372 0.119 1.514e-40   -39.820     TE    CGI   630046    317007
+
+# shuf
+TSS.inter.shuf.df <- read.delim("./07_CGI/02_TSSDistToCGI/AmexT_v47-AmexG_v6.0-DD.TSS.inter.shuf.bed", header = F, col.names =  c(colnames(TSS.df), colnames(shuf.df)) )
+
+TSS.inter.shuf.df <- TSS.inter.shuf.df %>% mutate(Start = as.numeric(Start), End = as.numeric(End), 
+                                                  sample = "shuf",
+                                                  Midpoint = round((Start + End)*0.5), 
+                                                  DistToTSS = Midpoint - TSS.Start)
+dim(TSS.inter.shuf.df) # 1046993      13
+write.csv(TSS.inter.shuf.df, paste0("./07_CGI/02_TSSDistToCGI/DistToTSS.shuf.csv"), quote = F, row.names = F)
+
+# > head(TSS.inter.shuf.df)
+#   TSS.Chr Window.Start Window.End                                              TSS.Attribute TSS.Start TSS.Strand    Chr  Start
+# 1  chr10p            0    1313039 gene_id AMEX60DD000001; gene_name ZFP37 [nr]|ZNF568 [hs];     313039          + chr10p  13282
+# 2  chr10p            0    1313039 gene_id AMEX60DD000001; gene_name ZFP37 [nr]|ZNF568 [hs];     313039          + chr10p  37130
+# 3  chr10p            0    1313039 gene_id AMEX60DD000001; gene_name ZFP37 [nr]|ZNF568 [hs];     313039          + chr10p  57236
+# 4  chr10p            0    1313039 gene_id AMEX60DD000001; gene_name ZFP37 [nr]|ZNF568 [hs];     313039          + chr10p 238394
+# 5  chr10p            0    1313039 gene_id AMEX60DD000001; gene_name ZFP37 [nr]|ZNF568 [hs];     313039          + chr10p 317655
+# 6  chr10p            0    1313039 gene_id AMEX60DD000001; gene_name ZFP37 [nr]|ZNF568 [hs];     313039          + chr10p 421704
+#      End   type sample Midpoint DistToTSS
+# 1  13625     TE   shuf    13454   -299585
+# 2  37391     TE   shuf    37260   -275779
+# 3  57663     TE   shuf    57450   -255589
+# 4 238690     TE   shuf   238542    -74497
+# 5 317995 others   shuf   317825      4786
+# 6 423885     TE   shuf   422794    109755
+
+
+### plot line histogram ###
+plot.df <- rbind(select(TSS.inter.CGI.df, sample, DistToTSS), select(TSS.inter.shuf.df, sample, DistToTSS))
+
+## Chi-squared Test for number of CGIs vs shufs in TSS +- 100bp
+counts <- plot.df %>%
+  group_by(sample) %>%
+  summarise(numsum_TSS100 = sum(abs(DistToTSS) <= 100),
+            numsum_TSS200 = sum(abs(DistToTSS) <= 200),
+            numsum_TSS500 = sum(abs(DistToTSS) <= 500)) %>%
+  column_to_rownames(var = "sample")
+
+total_CGI <- sum(plot.df$sample == "CGI")
+total_shuf <- sum(plot.df$sample == "shuf")
+
+chisq_test.df <- data.frame(
+  type = colnames(counts),
+  CGI_count = as.numeric(counts["CGI",]),
+  shuf_count = as.numeric(counts["shuf",]),
+  total_CGI = total_CGI,
+  total_shuf = total_shuf
+) %>%
+  rowwise() %>%
+  mutate(
+    p_value = {
+      observed <- matrix(c(CGI_count, total_CGI - CGI_count, shuf_count, total_shuf - shuf_count), nrow = 2, byrow = TRUE)
+      chisq_test <- chisq.test(observed)
+      chisq_test$p.value
+    }
+  ) %>% ungroup() 
+
+write.table(chisq_test.df, "./07_CGI/03_CGI_plot/histogram_DistToTSS_chisqtest.txt", quote = F, sep = "\t", row.names = F)
+
+
+## plot histogram for CGI/shuf dist to TSS
+pdf(paste0("./07_CGI/03_CGI_plot/histogram_DistToTSS.pdf"), height = 2, width = 4)
+plot.size = c(10000) # c(50000, 20000, 10000, 5000, 1000)
+bin.size = c(100) # c(200, 100, 100, 100, 100)
+
+TSS100_significance_label <- paste0("TSS +-100bp p-value ", round(chisq_test.df$p_value[chisq_test.df$type=="numsum_TSS100"],2))
+TSS200_significance_label <- paste0("TSS +-200bp p-value ", round(chisq_test.df$p_value[chisq_test.df$type=="numsum_TSS200"],2))
+TSS500_significance_label <- paste0("TSS +-500bp p-value ", round(chisq_test.df$p_value[chisq_test.df$type=="numsum_TSS500"],2))
+
+for (i in 1:length(plot.size)){
+  p1 <- ggplot(plot.df, aes(DistToTSS, colour = sample)) + # normalize to proportion, after_stat(density)
+    geom_freqpoly(binwidth = bin.size[i], size = 0.25) + # bin for calculate freq
+    theme_bw(base_size = 6) +
+    theme(panel.grid.minor=element_blank()) + # panel.grid.major=element_blank(), don't show minor line
+    scale_colour_manual(values = sample_col) +
+    coord_cartesian(xlim = c(-plot.size[i], plot.size[i])) + # trim x axis
+    scale_x_continuous(breaks = pretty_breaks(n=10)) + # set up x axis
+    scale_y_continuous(breaks = pretty_breaks(n=5)) + # set up y axis limits = c(0, bin.size), 
+    labs(x = "Dist to TSS (bp)", y = paste0("CGI Number in ",bin.size[i], "bp bin")) +
+    annotate("text", x = 0, y = 5, label = TSS100_significance_label, size = 2) +
+    annotate("text", x = 0, y = 10, label = TSS200_significance_label, size = 2) +
+    annotate("text", x = 0, y = 15, label = TSS500_significance_label, size = 2)
+  plot(p1)
+  }
+dev.off()
+
+
+
+
+```
+
+
+# 05. barplot of TE enrichment of CGI
+```{r}
+TE_CGI.anno.df <- TE_CGI.df %>% group_by(class, sample) %>% 
+  summarize(numsum = n()) %>% # CGI overlapped TE number
+  ungroup() %>%
+  mutate(perc = round(numsum / sum(numsum) * 100, 2), # perc = CGI overlapped TE number for each class in all CGI overlapped TE
+         typelabel = paste0(class, ", ", perc, "%"))
+         
+TE_shuf.anno.df <- TE_shuf.df %>% group_by(class, sample) %>% 
+  summarize(numsum = n()) %>% # shuffle overlapped TE number
+  ungroup() %>%
+  mutate(perc = round(numsum / sum(numsum) * 100, 2),
+         typelabel = paste0(class, ", ", perc, "%"))
+
+TE_anno.df <- rbind(TE_CGI.anno.df, TE_shuf.anno.df) %>% 
+  mutate(class = factor(class, levels = TEclass_order),
+         sample = factor(sample, levels = c("shuf", "CGI")) )
+
+write.table(TE_anno.df, "./07_CGI/03_CGI_plot/barplot_TE_CGI_anno.txt", quote = F, sep = "\t", row.names = F)
+
+
+## Chi-squared Test for each type
+# region sum
+total_TE_CGI <- sum(TE_anno.df$numsum[TE_anno.df$sample == "CGI"])
+total_TE_shuf <- sum(TE_anno.df$numsum[TE_anno.df$sample == "shuf"])
+
+# Chi-squared Test
+chisq_test.df <- TE_anno.df %>%
+  group_by(class) %>%
+  summarise(
+    TE_CGI_count = sum(numsum[sample == "CGI"]),
+    TE_shuf_count = sum(numsum[sample == "shuf"]),
+    total_TE_CGI = total_TE_CGI,
+    total_TE_shuf = total_TE_shuf,
+    p_value = {
+      observed <- matrix(c(TE_CGI_count, total_TE_CGI - TE_CGI_count, TE_shuf_count, total_TE_shuf - TE_shuf_count), nrow = 2, byrow = TRUE)
+      chisq_test <- chisq.test(observed)
+      chisq_test$p.value
+    }
+  )
+write.table(chisq_test.df, "./07_CGI/03_CGI_plot/barplot_TE_CGI_anno_chisqtest.txt", quote = F, sep = "\t", row.names = F)
+
+
+## plot barplot and add significance
+DNA_significance_label <- paste0("DNA p-value ", round(chisq_test.df$p_value[chisq_test.df$class=="DNA"],2))
+LINE_significance_label <- paste0("LINE p-value ", round(chisq_test.df$p_value[chisq_test.df$class=="LINE"],2))
+
+pdf(paste0("./07_CGI/03_CGI_plot/barplot_TE_CGI_anno.pdf"), height = 3, width = 3)
+# normalize to proportion
+p1 <- ggplot(data=TE_anno.df, aes(x=sample, y=numsum, fill=class)) + 
+  geom_bar(colour = NA, stat = "identity", position = "fill", width = 0.8) + 
+  theme_classic(base_size = 6) + scale_fill_manual(values = TEclass_col) +
+  theme(axis.text.x = element_text(angle = 90)) + 
+  scale_y_continuous(expand = c(0,0)) +
+  labs(x = "", y = "Proportion (%)", title = "Composition") +
+  geom_text(aes(label = typelabel), 
+            position = position_fill(vjust = 0.5), size = 2) +
+  annotate("text", x = 2, y = 0.95, label = DNA_significance_label, size = 2) +
+  annotate("text", x = 2, y = 0.9, label = LINE_significance_label, size = 2)
+plot(p1)
+
+dev.off()
+
+
+
+```
+
+
+# 05.2 lollipop of CGI overlapped TE% and active TE%
+```{r}
+### calculate CGI overlapped TE% and active TE% ###
+## Number of all TE overlap with CGI, by class
+TE_CGI_copynum <- TE_CGI.df %>% group_by(class) %>% 
+  summarize(TEoverlapCGIcopynum = n()) %>% ungroup() # CGI overlapped TE number
+
+TE_shuf_copynum <- TE_shuf.df %>% group_by(class) %>% 
+  summarize(TEoverlapshufcopynum = n()) %>% ungroup() # shuffle overlapped TE number
+
+## Number of active TE overlap with CGI, by class
+activeTE_CGI_copynum <- TE_CGI.df %>% inner_join(select(activeTE_bed, Chr, Start, End), by = c("Chr", "Start", "End")) %>% # filter active TE overlap with CGI 
+  group_by(class) %>% 
+  summarize(activeTEoverlapCGIcopynum = n()) %>% ungroup() # CGI overlapped active TE number
+
+activeTE_shuf_copynum <- TE_shuf.df %>% inner_join(select(activeTE_bed, Chr, Start, End), by = c("Chr", "Start", "End")) %>% # filter active TE overlap with shuffle 
+  group_by(class) %>% 
+  summarize(activeTEoverlapshufcopynum = n()) %>% ungroup() # shuf overlapped active TE number
+
+
+## Number of all genomic TE, by class
+TE_copynum <- TE_bed %>% group_by(class) %>% 
+  summarize(allTEcopynum = n()) %>% ungroup()
+
+## Number of all active TE, by classs
+activeTE_copynum <- activeTE_bed %>% group_by(class) %>% 
+  summarize(activeTEcopynum = n()) %>% ungroup()
+
+## CGI overlapped TE% and active TE%
+TE_perc.df <- TE_CGI_copynum  %>% left_join(TE_shuf_copynum) %>% 
+  left_join(activeTE_CGI_copynum) %>% left_join(activeTE_shuf_copynum) %>% 
+  left_join(TE_copynum) %>% left_join(activeTE_copynum) %>%
+  mutate(TEoverlapCGI.allTE.perc = round( (TEoverlapCGIcopynum *100 / allTEcopynum), 3), # CGI overlapped TE%
+         TEoverlapCGI.activeTE.perc = round( (activeTEoverlapCGIcopynum *100 / activeTEcopynum), 3), # CGI overlapped active TE%
+         TEoverlapshuf.allTE.perc = round( (TEoverlapshufcopynum *100 / allTEcopynum), 3), # shuf overlapped TE%
+         TEoverlapshuf.activeTE.perc = round( (activeTEoverlapshufcopynum *100 / activeTEcopynum), 3), # shuf overlapped active TE%
+         ) # CGI overlapped active TE%
+
+write.table(TE_perc.df, "./07_CGI/03_CGI_plot/lollipop_TE_CGI_overlap_all_active.txt", quote = F, sep = "\t", row.names = F)
+```
+
+```{r}
+### plot lollipop ###
+majorTE_order <- c("DNA", "DIRS", "LTR", "LINE")
+plot.majorTE.df <- TE_perc.df %>% filter(class %in% majorTE_order) %>% 
+  mutate(class = factor(class, levels = majorTE_order))
+  
+## plot CGI overlapped TE%, shuf
+plot_TEoverlapshuf.allTE.perc <- ggplot(plot.majorTE.df, aes(x=TEoverlapshuf.allTE.perc, y=class)) +
+  scale_x_reverse(limits = c(10, -0.05)) + 
+  geom_segment(aes(xend=0, yend=class), color="grey") +
+  geom_point(aes(color=class), size=2) + 
+  scale_color_manual(values = TEclass_col) + 
+  scale_y_discrete(limits = rev(plot.majorTE.df$class)) + 
+  theme_light() +
+  theme(
+    panel.grid.minor.x = element_blank(),
+    panel.border = element_blank(),
+    axis.title.y = element_blank(),
+    legend.position = "left" 
+  )
+
+## plot CGI overlapped TE%, CGI
+plot_TEoverlapCGI.allTE.perc <- ggplot(plot.majorTE.df, aes(x=TEoverlapCGI.allTE.perc, y=class)) +
+  xlim(-0.05, 10) + 
+  geom_segment(aes(xend=0, yend=class), color="grey") +
+  geom_point(aes(color=class), size=2) + 
+  scale_color_manual(values = TEclass_col) + 
+  scale_y_discrete(limits = rev(plot.majorTE.df$class)) + 
+  theme_light() +
+  theme(
+    panel.grid.minor.x = element_blank(),
+    panel.border = element_blank(),
+    axis.title.y = element_blank() 
+  )
+
+
+
+## plot CGI overlapped active TE%, shuf
+plot_TEoverlapshuf.activeTE.perc <- ggplot(plot.majorTE.df, aes(x=TEoverlapshuf.activeTE.perc, y=class)) +
+  scale_x_reverse(limits = c(80, -0.05)) +
+  geom_segment(aes(xend=0, yend=class), color="grey") +
+  geom_point(aes(color=class), size=2) + 
+  scale_color_manual(values = TEclass_col) + 
+  scale_y_discrete(limits = rev(plot.majorTE.df$class)) + 
+  theme_light() +
+  theme(
+    panel.grid.minor.x = element_blank(),
+    panel.border = element_blank(),
+    axis.title.y = element_blank(),
+    legend.position = "left" 
+  )
+
+## plot CGI overlapped active TE%, CGI
+plot_TEoverlapCGI.activeTE.perc <- ggplot(plot.majorTE.df, aes(x=TEoverlapCGI.activeTE.perc, y=class)) +
+  xlim(-0.05, 80) + 
+  geom_segment(aes(xend=0, yend=class), color="grey") +
+  geom_point(aes(color=class), size=2) + 
+  scale_color_manual(values = TEclass_col) +
+  scale_y_discrete(limits = rev(plot.majorTE.df$class)) + 
+  theme_light() +
+  theme(
+    panel.grid.minor.x = element_blank(),
+    panel.border = element_blank(),
+    axis.title.y = element_blank() 
+  )
+
+
+
+pdf("./07_CGI/03_CGI_plot/lollipop_TE_CGI_overlap_all_active.pdf", height = 4, width = 8)
+plot_grid(plot_TEoverlapshuf.allTE.perc, plot_TEoverlapCGI.allTE.perc, 
+          align = 'v', ncol = 2, rel_widths = c(1, 1))
+plot_grid(plot_TEoverlapshuf.activeTE.perc, plot_TEoverlapCGI.activeTE.perc, 
+          align = 'v', ncol = 2, rel_widths = c(1, 1))
+dev.off()
+
+
+```
+
+
+
+
+# 06. violinplot of TE age, TE overlap with CGI vs the rest
+```{r}
+plot.df <- rbind(TE_bed, TE_CGI.df) %>% 
+  mutate(class = factor(class, levels = TEclass_order),
+         sample = factor(sample, levels = c("allTE", "CGI")) )
+head(plot.df)
+# write.table(plot.df, "./07_CGI/03_CGI_plot/violin_TE_CGI_age.txt", quote = F, sep = "\t", row.names = F)
+
+
+## statistics
+stats.df <- plot.df %>%
+  group_by(class) %>%
+  summarise(p_value_allTEvsCGI = t.test(PercDiv ~ sample, data = ., alternative = "two.sided")$p.value)
+write.table(stats.df, "./07_CGI/03_CGI_plot/violin_TE_CGI_age_ttest.txt", quote = F, sep = "\t", row.names = F)
+
+
+## plot violin
+pdf(paste0("./07_CGI/03_CGI_plot/violin_TE_CGI_age.pdf"), height = 3, width = 12)
+p <- ggplot(data = plot.df) +
+  geom_half_violin(aes(x = class, y = PercDiv, fill = sample, split = sample), position = "identity", alpha = 0.7, colour = NA, adjust = 1.25) + 
+  geom_boxplot(aes(x = class, y = PercDiv, fill = sample), width = 0.1, outlier.shape = NA, lwd = 0.5) + 
+  theme_minimal() +
+  scale_fill_manual(values = sample_col) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) 
+plot(p)
+dev.off()
+
+
+```
+
+
+# 07. violin plot of met level, TE overlap with CGI vs the rest
+```{r}
+### load TE met & add TE subfamily and active TE info ###
+TE.ls <- list()
+for (i in c(1,2,3,4)) {
+  file_path <- paste0("./08_seqmonk_xinyuTEanno/FeatureReport/FeatureReport_nonexon_", TEs[i], ".txt")
+  MeanMet_colname <- "Mean AmexM.R1_val_1_bismark_bt2_pe.deduplicated.bismark.cov.gz"
+  
+  TE.ls[[i]] <- fread(file_path, select = c("Chr", "Start", "End", "Strand", MeanMet_colname, "Description")) %>% 
+    rename("MeanMet" = MeanMet_colname) %>% 
+    mutate(MeanMet = round(MeanMet, 3),
+           Chr = paste0("chr", Chr)) %>% 
+    left_join(TE_bed, by = c("Chr" = "Chr", "Start" = "Start", "End" = "End", "Strand" = "Strand", "Description" = "class")) # add family and PercDiv info
+}
+
+TE.met.df <- do.call(rbind, TE.ls) %>% rename("class" = "Description") %>%
+  select(Chr, Start, End, TE, family, class, MeanMet)
+
+## add met info to TE overlap with CGI ##
+TE_all.met.df <- TE.met.df %>% 
+  mutate(sample = "allTE") %>% 
+  select(TE, family, class, MeanMet, sample)
+
+TE_CGI.met.df <- TE_CGI.df %>% left_join(TE.met.df) %>% 
+  select(TE, family, class, MeanMet, sample)
+
+### plot ###
+plot.df <- rbind(TE_all.met.df, TE_CGI.met.df) %>% 
+  mutate(class = factor(class, levels = TEclass_order),
+         sample = factor(sample, levels = c("allTE", "CGI")) )
+head(plot.df)
+remove(TE.met.df)
+
+## statistics
+stats.df <- plot.df %>%
+  group_by(class) %>%
+  summarise(p_value_allTEvsCGI = t.test(MeanMet ~ sample, data = ., alternative = "two.sided")$p.value)
+write.table(stats.df, "./07_CGI/03_CGI_plot/violin_TE_CGI_met_ttest.txt", quote = F, sep = "\t", row.names = F)
+
+
+## plot violin
+pdf(paste0("./07_CGI/03_CGI_plot/violin_TE_CGI_met.pdf"), height = 3, width = 12)
+p <- ggplot(data = plot.df) +
+  geom_half_violin(aes(x = class, y = MeanMet, fill = sample, split = sample), position = "identity", alpha = 0.7, colour = NA, adjust = 1.25) + 
+  geom_boxplot(aes(x = class, y = MeanMet, fill = sample), width = 0.1, outlier.shape = NA, lwd = 0.5) + 
+  theme_minimal() +
+  scale_fill_manual(values = sample_col) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) 
+plot(p)
+dev.off()
+```
+
+
+
+
+
