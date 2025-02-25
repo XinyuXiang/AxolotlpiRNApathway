@@ -28,6 +28,9 @@ This pipeline outlines the steps to obtain TE consensus sequences and annotate t
 
 06 **Round 3: Annotate Unknown TEs**  
    - Annotate remaining unknown TEs from DeepTE.
-
-07 **Merge Annotations**  
    - Integrate the results from all three rounds to produce the final, comprehensive genome annotation.
+
+## 3. Potential Active TE Annotation
+07 **Identify potential active TEs**
+   - Identify potential active TEs with length cutoff and percDiv cutoff.
+
