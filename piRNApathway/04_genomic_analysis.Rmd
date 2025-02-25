@@ -1,0 +1,147 @@
+---
+title: "04_genomic_analysis.Rmd"
+author: "Xinyu Xiang"
+date: "2024-05-13"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(ggplot2)
+library(tidyr)
+library(dplyr)
+library(ggrastr)
+library(stringr)
+library(RColorBrewer)
+library(ggsci)
+library(data.table)
+library(cowplot)
+
+```
+
+```{r configure}
+### setup ###
+metadata <- read.table("./metadata_merge.txt", stringsAsFactors = FALSE, header=TRUE)
+metadata
+samplelist=metadata$sample
+piRNAlen.cutoff = 23
+
+TEclass_order <- c("LTR", "DNA", "LINE", "DIRS", "RC", "PLE", "SINE", "Simple_repeat", "Ngaro", "Low_complexity", "Satellite", "other", "unknown")
+# TEclass_order <- c("LTR", "DNA", "LINE", "DIRS", "RC", "PLE", "SINE", "Ngaro", "Others")
+
+genome_composition_order <- c("genome_gene", "LTR", "DNA", "LINE", "DIRS", "RC", "PLE", "SINE", "Simple_repeat", "Ngaro", "Low_complexity", "Satellite", "other", "unknown", "genome_other")
+
+genome_composition_col <- c(genome_gene = "#ff6347", LTR  = "#9b2226", DNA  = "#ca6702", LINE  = "#007f5f", SINE  = "#4895ef", DIRS  = "#e9d8a6", Low_complexity  = "#b6ad90", Ngaro  = "#b9fbc0", PLE  = "#e7bc91", RC = "#dbcdf0", Satellite  = "#c5dedd", Simple_repeat  = "#8eecf5", other  = "#eddcd2", unknown  = "#d3d3d3", genome_other = "#f5f3f4")
+TEclass_col <- c(LTR  = "#9b2226", DNA  = "#ca6702", LINE  = "#007f5f", SINE  = "#4895ef", DIRS  = "#e9d8a6", Low_complexity  = "#b6ad90", Ngaro  = "#b9fbc0", PLE  = "#e7bc91", RC = "#dbcdf0", Satellite  = "#c5dedd", Simple_repeat  = "#8eecf5", other  = "#eddcd2", unknown  = "#d3d3d3")
+
+
+```
+
+# 01. piRNA anno genome data cleaning & merge data
+```{r, data cleaning & merge data}
+# merge anno_Genome_TE, anno_Genome_gene, anno_Genome_other
+for (sample in samplelist) {
+### data input & cleaning ###
+anno_Genome_TE <- read.table(paste0("./05_STARmis3_overlap15_anno_Genome/", sample, "_RM.bed"), comment.char = "", sep = "\t") %>% 
+  select(V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V11, V13, V14, V15) %>% 
+  rename("sRNA_chr" = "V1", "sRNA_start" = "V2", "sRNA_end" = "V3", "sRNA_ID" = "V4", "sRNA_length" = "V5", "sRNA_strand" = "V6", "sRNA_count" = "V7", 
+         "elem_chr" = "V8", "elem_start" = "V9", "elem_end" = "V10", "elem_name" = "V11", "elem_strand" = "V13", "elem_family" = "V14", "elem_class" = "V15") %>% 
+  mutate(sRNA_count = round(1 / sRNA_count, 3), type = "genome_TE")
+
+anno_Genome_gene <- read.table(paste0("./05_STARmis3_overlap15_anno_Genome/", sample, "_gene.bed"), comment.char = "", sep = "\t") %>% 
+  select(V1, V2, V3, V4, V5, V6, V7, V8, V9, V10, V13, V14) %>% 
+  rename("sRNA_chr" = "V1", "sRNA_start" = "V2", "sRNA_end" = "V3", "sRNA_ID" = "V4", "sRNA_length" = "V5", "sRNA_strand" = "V6", "sRNA_count" = "V7", 
+         "elem_chr" = "V8", "elem_start" = "V9", "elem_end" = "V10", "elem_strand" = "V13", "elem_name" = "V14") %>% 
+  mutate(elem_family = "", elem_class = "",
+         sRNA_count = round(1 / sRNA_count, 3), 
+         type = "genome_gene")
+
+anno_Genome_other <- read.table(paste0("./05_STARmis3_overlap15_anno_Genome/", sample, "_other.bed"), comment.char = "", sep = "\t") %>% 
+  select(V1, V2, V3, V4, V5, V6, V7) %>% 
+  rename("sRNA_chr" = "V1", "sRNA_start" = "V2", "sRNA_end" = "V3", "sRNA_ID" = "V4", "sRNA_length" = "V5", "sRNA_strand" = "V6", "sRNA_count" = "V7") %>% 
+  mutate(elem_chr = "", elem_start = "",elem_end = "", elem_name = "", elem_strand = "", elem_family = "", elem_class = "",
+         sRNA_count = round(1 / sRNA_count, 3), 
+         type = "genome_other")  
+
+
+### reorder data column ###
+col_reorder = c("sRNA_ID", "sRNA_chr", "sRNA_start", "sRNA_end", "sRNA_length", "sRNA_count", "sRNA_strand", "elem_name", "elem_family", "elem_class", "elem_chr", "elem_start", "elem_end", "elem_strand", "type")
+anno_Genome_TE = anno_Genome_TE[,col_reorder]
+anno_Genome_gene = anno_Genome_gene[,col_reorder]
+anno_Genome_other = anno_Genome_other[,col_reorder]
+
+### merge cleaned data ###
+#merge.df <- rbind(anno_Genome_TE, anno_Genome_gene, anno_Genome_other)  
+#write.table(merge.df, paste0("./09_views_Genome/00_rawdata/rawdata_", sample, "_merge.txt"), sep="\t", row.names = FALSE, col.names = TRUE, quote = FALSE)
+
+
+
+### filter piRNA ###
+pirna.anno_Genome_TE <- anno_Genome_TE %>% 
+  filter(sRNA_length >= piRNAlen.cutoff) %>% # filter piRNA by length
+  group_by(elem_class) %>% summarise(countsum = round(sum(sRNA_count),3)) %>%
+  rename("class" = "elem_class")
+
+pirna.anno_Genome_gene <- anno_Genome_gene %>% 
+  filter(sRNA_length >= piRNAlen.cutoff) %>% # filter piRNA by length
+  select(starts_with("sRNA")) %>% distinct() %>% # avoid piRNAs mapped to different transcripts of a gene at multiple time
+  summarise(countsum = round(sum(sRNA_count),3)) %>% 
+  mutate(class = "genome_gene")
+
+pirna.anno_Genome_other <- anno_Genome_other %>% 
+  filter(sRNA_length >= piRNAlen.cutoff) %>% # filter piRNA by length
+  select(starts_with("sRNA")) %>% distinct() %>% # avoid piRNAs mapped to different transcripts of a gene at multiple time
+  summarise(countsum = round(sum(sRNA_count),3)) %>% 
+  mutate(class = "genome_other")
+
+
+pirna.countsum <- rbind(pirna.anno_Genome_TE, pirna.anno_Genome_gene, pirna.anno_Genome_other)
+pirna.countsum
+
+write.csv(pirna.countsum, paste0("./09_views_Genome/01_sRNA_statistics/pirna_countsum_", sample, ".csv"), quote = F, row.names = F)
+
+
+}
+
+
+```
+
+
+# 02 barplot of composition of annotated piRNAs 
+```{r composition barplot}
+##### classify and count sRNA for genome class #####
+plot.ls <- list()
+for (sample in samplelist) {
+plot.ls[[sample]] <- read.csv(paste0("./09_views_Genome/01_sRNA_statistics/pirna_countsum_",sample,".csv")) 
+plot.ls[[sample]] <- plot.ls[[sample]] %>% mutate(sample = sample)
+}
+plot.df <- as.data.frame(do.call(rbind,plot.ls))
+write.csv(plot.df, paste0("./09_views_Genome/02_barplot_sRNA_composition/countsum_allsample.csv"), quote = F, row.names = F)
+
+
+plot.df <- plot.df %>% mutate(countsum = as.numeric(countsum), 
+                              sample = factor(sample, levels = samplelist),
+                              class = factor(class, levels = genome_composition_order))
+
+pdf(paste0("./09_views_Genome/02_barplot_sRNA_composition/countsum_allsample.pdf"), height = 4, width = 7)
+# normalize to proportion
+p1 <- ggplot(data=plot.df, aes(x=sample, y=countsum, fill=class)) + 
+  geom_bar(colour = "black", stat = "identity", position = "fill", width = 0.8) + 
+  theme_classic(base_size = 12) + scale_fill_manual(values = genome_composition_col) +
+  theme(axis.text.x = element_text(angle = 90)) + 
+  scale_y_continuous(expand = c(0,0)) +
+  labs(x = "", y = "Proportion", title = "mapped piRNA composition")
+plot(p1)
+
+# original distribution
+p2 <- ggplot(data=plot.df, aes(x=sample, y=countsum, fill=class)) + 
+  geom_bar(colour = "black", stat = "identity", width = 0.8) + 
+  theme_classic(base_size = 12) + scale_fill_manual(values = genome_composition_col) +
+  theme(axis.text.x = element_text(angle = 90)) + 
+  scale_y_continuous(expand = c(0,0)) +
+  labs(x = "", y = "Count sum", title = "mapped piRNA composition")
+plot(p2)
+
+dev.off()
+```
+

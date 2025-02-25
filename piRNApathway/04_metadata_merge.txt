@@ -1,0 +1,5 @@
+sample	sample_id	condition
+testis-1	T_1	Testis
+testis-2	T_2	Testis
+oocyte-1	O_1	Oocyte
+oocyte-2	O_2	Oocyte
