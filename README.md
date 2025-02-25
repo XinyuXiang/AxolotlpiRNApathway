@@ -15,7 +15,7 @@ This repository contains a collection of scripts and pipelines developed for the
 ## Requirements
 
 - Operating System: Linux/Unix/MacOS
-- Scripting Languages: R (version 4.2.1 or higher), Python (version 2.7.5 or higher), Bash
+- Scripting Languages: R (v4.2.1 or higher), Python (v2.7.5 or higher), Perl (v5.16.3 or higher), Bash
 - Software: 
   - For axolotl transposon annotation, this pipeline utilizes `RepeatMasker v4.1.5`, `RepeatModeler v2.0.5`, and `DeepTE` to comprehensively identify and annotate transposons. For potentially active transposon identification, custom scripts with filtering criteria are applied.
 
