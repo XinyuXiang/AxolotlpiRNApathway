@@ -22,7 +22,7 @@ This pipeline outlines the steps to process RNA-seq and sRNA-seq raw data, visua
    - Use `fastqc` for QC, `trim_galore` for adptor trimming, `STAR` for alignment, `samtools` for bam sort, `featurecounts` for read quantification.
      
 02 **visualization**  
-   - Plot heatmap for piRNA factor expression. Normalize to RPKM and plot by pheatmap in R.
+   - Plot heatmap for piRNA factor expression. Normalize to RPKM and plot by `pheatmap` in R.
 
 
 
@@ -32,11 +32,12 @@ This pipeline outlines the steps to process RNA-seq and sRNA-seq raw data, visua
    - Use `fastqc` for QC, `cutadapt` for adptor trimming, `STAR` for alignment, `samtools` for bam sort, `bedtools` for annotation.
 
 04 **genomic analysis**  
-   - Get genomic statistics.
-   - Identify piRNA clusters
+   - Identify piRNA clusters by `proTRAC`.
+   - Calculate piRNA coverage over genome.
+   - Plot piRNA clusters with coverage signal by `circlize`.
 
 05 **TE consensus analysis**  
-   - Plot piRNA tracks over consensus sequences
+   - Plot piRNA tracks over consensus sequences.
    - Analysis ping-pong cycle features (1U10A and 10nt-opverlap).
 
 
