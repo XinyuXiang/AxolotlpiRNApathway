@@ -16,7 +16,7 @@ This repository contains a collection of scripts and pipelines developed for the
 
 - Operating System: Linux/Unix/MacOS
 - Scripting Languages: R (version 4.2.1 or higher), Python (version 2.7.5 or higher), Bash
-- Dependencies: 
+- Software: 
   - For axolotl transposon annotation, this pipeline utilizes `RepeatMasker v4.1.5`, `RepeatModeler v2.0.5`, and `DeepTE` to comprehensively identify and annotate transposons. For potentially active transposon identification, custom scripts with filtering criteria are applied.
 
   - For piRNA pathway related analysis, this pipeline applies `Cutadapt v2.9` for adapter trimming, `STAR v2.7.0e` for read alignment, `proTRAC v2.4.3` for piRNA cluster detection along with custom scripts for visualization.
