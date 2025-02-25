@@ -1,0 +1,571 @@
+---
+title: "06_TEconsensus_analysis.Rmd"
+author: "Xinyu Xiang"
+date: "2024-06-02"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(ggplot2)
+library(tidyr)
+library(dplyr)
+library(stringr)
+library(ggrastr)
+library(DESeq2)
+library(pheatmap)
+library(ComplexHeatmap)
+
+
+```
+
+# 00. configure info
+```{r}
+metadata <- read.table("./metadata_merge.txt", stringsAsFactors = FALSE, header=TRUE)
+metadata
+piRNAlen.cutoff = 23
+
+TE_config <- read.delim("/reference_AmexG_v6.0/AmexG_v6.0_TE_xinyu_anno/AmexG_v6.0_consensus.merge.config", stringsAsFactors = FALSE, header=FALSE, col.names = c("TEID", "class", "family","TE","length"))
+
+TEclass_order <- c("LTR", "DNA", "LINE", "DIRS", "RC", "PLE", "SINE", "Ngaro", "Others")
+
+TEclass_col <- c(LTR  = "#9b2226", DNA  = "#ca6702", LINE  = "#007f5f", SINE  = "#4895ef", DIRS  = "#e9d8a6", Ngaro  = "#b9fbc0", PLE  = "#e7bc91", RC = "#dbcdf0", Others  = "#eddcd2")
+condition_col <- c(testis = "#354f52", oocyte = "#9f86c0")
+type_col = c(testis_fwd = "#286566", oocyte_fwd = "#5c2862",
+              testis_rev = "#3f9497", oocyte_rev = "#873388")
+
+
+
+```
+
+# 01. piRNA coverage track over TE consensus sequence
+
+## 1.1 calculate total count
+```{r}
+####### calculate total count ####### 
+count.sum.ls <- list()
+for (Sample in metadata$sample) {
+length_summary <- read.table(paste0("./03_library_info/",Sample,"_len.txt"), col.names = c("sRNA_length", "sRNA_count") )
+count.sum.ls[[Sample]] <- c(countsum = sum(length_summary$sRNA_count))
+}
+count.sum.df <- data.frame(sample = metadata[,"sample"], count = do.call(rbind, count.sum.ls)) 
+write.table(count.sum.df, "./11_views_TE_v2/01_TE_track/totalcount.txt", quote = F, row.names = F)
+
+```
+
+
+## 1.2 track for piRNA
+plot by ggplot2
+```{r}
+count.sum.df = read.table("./11_views_TE_v2/01_TE_track/totalcount.txt", header = T)
+
+for (j in 1:nrow(TE_config)) {
+  TEclass <- TE_config[j,"class"]
+  TEfamily <- gsub("/","-",TE_config[j,"family"])
+  TEsubfamily <- TE_config[j,"TE"]
+
+  piRNA.fwd.ls <- list()
+  piRNA.rev.ls <- list()
+  for (Sample in metadata$sample) {
+    ##### input TEcov.bed #####
+    ### fwd strand ###
+    piRNA.fwd.ls[[Sample]] <- read.delim(paste0("./11_views_TE_v2/01_TE_track/TEcovbed_piRNA/", Sample, ".", TEsubfamily, ".fwd.bed"), stringsAsFactors = FALSE, header = FALSE, col.names = c("TEID", "start", "end", "count") ) %>% 
+      mutate(sample = Sample, condition = sub("..$", "", Sample), 
+             count = as.numeric(replace(count, count == "NAN", 0)))
+
+    ### rev strand ###
+    piRNA.rev.ls[[Sample]] <- read.delim(paste0("./11_views_TE_v2/01_TE_track/TEcovbed_piRNA/", Sample, ".", TEsubfamily, ".rev.bed"), stringsAsFactors = FALSE, header = FALSE, col.names = c("TEID", "start", "end", "count") ) %>% 
+      mutate(sample = Sample, condition = sub("..$", "", Sample),
+             count = as.numeric(replace(count, count == "NAN", 0)))
+  }
+  
+    # merge for all samples and calculate RPM
+    piRNA.fwd.RPM.df <- do.call(rbind, piRNA.fwd.ls) %>% left_join(count.sum.df) %>% 
+      mutate(RPM = round(1000000 * count / countsum, 2), strand = "fwd") 
+    piRNA.rev.RPM.df <- do.call(rbind, piRNA.rev.ls) %>% left_join(count.sum.df) %>% 
+      mutate(RPM = round(-1000000 * count / countsum, 2), strand = "rev") 
+    
+    # calculate RPM_mean
+    piRNA.RPM.df <- rbind(piRNA.fwd.RPM.df, piRNA.rev.RPM.df)
+    piRNA.RPM.mean.df <- piRNA.RPM.df %>% 
+      group_by(condition, strand, TEID, start, end) %>% summarise(RPM_mean = mean(RPM)) %>%
+      mutate(type = paste0(condition, "_", strand),
+             condition = factor(condition, levels = c("testis", "oocyte")))
+    write.csv(piRNA.RPM.mean.df, paste0("./11_views_TE_v2/01_TE_track/TEtrackplot_piRNA_RPMdata/", TEclass, ".", TEfamily, ".", TEsubfamily, ".RPM_mean.csv"), quote = F, row.names = F)
+    
+    
+    ## plot ##
+    plot_width <- round(max(piRNA.RPM.mean.df$end) / 20, 0)
+    pdf(paste0("./11_views_TE_v2/01_TE_track/TEtrackplot_piRNA/", TEclass, ".", TEfamily, ".", TEsubfamily, ".pdf"), 
+        height = 5, width = plot_width)
+       ymax <- max(abs(piRNA.RPM.mean.df$RPM_mean))
+       
+       p <- ggplot(piRNA.RPM.mean.df, aes(x = end, y = RPM_mean, fill = type)) +
+         geom_col(position = "identity") +
+         labs(x = "position", y = "RPM mean", title = paste0(TEclass, ".", TEfamily, ".", TEsubfamily)) + 
+         scale_y_continuous(limits = c(-ymax, ymax)) +
+           scale_x_continuous(
+             breaks = seq(0, max(piRNA.RPM.mean.df$end), by = 100), 
+             minor_breaks = seq(0, max(piRNA.RPM.mean.df$end), by = 10)  ) +
+         scale_fill_manual(values = type_col) + 
+         facet_grid( ~ condition) +
+         theme_minimal() +
+         theme(panel.grid.minor.y = element_blank())
+       
+       plot(p)
+    dev.off()
+ 
+}
+
+
+
+```
+
+
+
+# 02. barplot of top piRNA enrichment by TE family / piRNA RPKM bin by TE class
+## 2.1 input & clean TE alignment bed
+```{r}
+TE_bed_stat_ls <- list()
+for (Sample in metadata$sample) {
+  print(Sample)
+  TE_bed <- read.table(paste0("./04_STAR_TE_mismatch3_overlap15/",Sample,"_TE_srt_edit.bed"), header = FALSE, stringsAsFactors = FALSE, comment.char = "", col.names = c("TEID", "Start", "End", "readID", "length", "strand", "NH"))
+  TE_bed_stat_ls[[Sample]] <- TE_bed %>% 
+    filter(length >= piRNAlen.cutoff) %>% # filter piRNAs
+    mutate(sRNA_count = round(1/ NH, 3)) %>% # sRNA count score for mapped site
+    group_by(TEID) %>%
+    summarise(count_sum = sum(sRNA_count)) %>%
+    mutate(sample = Sample)
+}
+
+TE_bed_stat <- do.call(rbind, TE_bed_stat_ls) %>% left_join(TE_config)
+
+```
+
+
+## 2.2 calculate RPKM
+```{r}
+TE_countsum <- TE_bed_stat %>%
+  group_by(sample) %>%
+  summarise(total_count = sum(count_sum))
+
+# by TE
+TE_bed_RPKM <- TE_bed_stat %>% left_join(TE_countsum) %>%
+  mutate(RPKM = round(count_sum *1000000 *1000/ (total_count * length), 3))
+head(TE_bed_RPKM)
+
+write.csv(TE_bed_RPKM, paste0("./11_views_TE_v2/01_sRNA_statistics/pirna_countRPKM_byTE.csv"), quote = F, row.names = F)
+
+# by TE family
+TEfamily_countsum <- TE_bed_stat %>%
+  group_by(sample, family, class) %>%
+  summarise(familycount_sum = sum(count_sum),
+            length_sum = sum(length))
+
+
+TEfamily_bed_RPKM <- TEfamily_countsum %>% left_join(TE_countsum) %>%
+  mutate(RPKM = round(familycount_sum *1000000 *1000/ (total_count * length_sum), 3))
+head(TEfamily_bed_RPKM)
+
+write.csv(TEfamily_bed_RPKM, paste0("./11_views_TE_v2/01_sRNA_statistics/pirna_countRPKM_byTEfamily.csv"), quote = F, row.names = F)
+
+
+
+```
+
+
+## 2.3 barplot of top piRNA enrichment by TE family
+```{r}
+##### input data #####
+TEfamily_bed_RPKM <- read.csv(paste0("./11_views_TE_v2/01_sRNA_statistics/pirna_countRPKM_byTEfamily.csv"))
+
+##### plot barplot #####
+pdf(paste0("./11_views_TE_v2/02_barplot_countRPKM/barplot_pirna_countRPKM_byTEfamily.pdf"), height = 5, width = 13)
+##### plot by TE family, sample mean #####
+plot.df <- TEfamily_bed_RPKM %>% group_by(family, class) %>%
+  summarise(RPKMmean = mean(RPKM)) %>%
+  mutate(log2RPKMmean = round(log2(RPKMmean +1), 3))
+
+family_order <- plot.df %>% arrange(desc(RPKMmean)) %>% select(family) %>% distinct()
+
+plot.df <- plot.df %>%
+  mutate(family = factor(family, levels = family_order$family), 
+        class = factor(class, levels = TEclass_order))
+head(plot.df)
+
+y_max <- ceiling(max(plot.df$log2RPKMmean))
+p <- ggplot(plot.df, aes(x=family, y = log2RPKMmean, fill=class)) + 
+      geom_col(position = "dodge", width = 0.8) + #geom_col(position = position_dodge2(width = 0.5, preserve = "single")
+      labs(x = "TE family", y = "log2(RPKMmean+1)", title = paste0("TE consensi count RPKMmean")) + 
+      scale_fill_manual(values = TEclass_col) + 
+      facet_grid( ~ class, scales = "free_x", space = "free_x") + # group by class #
+      scale_y_continuous(limits = c(0, y_max)) +
+      theme_classic() +
+      theme(axis.text.x = element_text(angle = 60, hjust = 1)) # text = element_text(family = "Arial"), # ; legend(x = "topright", legend = names(col1), fill = col1)
+  
+  plot(p)
+
+  
+##### plot by TE family, by each sample #####
+family_order <- TEfamily_bed_RPKM %>% arrange(desc(RPKM)) %>% select(family) %>% distinct()
+
+plot.df <- TEfamily_bed_RPKM %>%
+  mutate(log2RPKM = round(log2(RPKM +1), 3),
+    family = factor(family, levels = family_order$family), 
+    class = factor(class, levels = TEclass_order))
+head(plot.df)
+
+p <- ggplot(plot.df, aes(x=family, y = log2RPKM, fill=class)) + 
+      geom_col(position = "dodge", width = 0.8) + #geom_col(position = position_dodge2(width = 0.5, preserve = "single")
+      labs(x = "TE family", y = "log2(RPKM+1)", title = paste0("TE consensi count RPKM")) + 
+      scale_fill_manual(values = TEclass_col) + 
+      facet_grid(sample ~ class, scales = "free_x", space = "free_x") + # group by class #
+      scale_y_continuous(limits = c(0, y_max)) +
+      theme_classic() +
+      theme(axis.text.x = element_text(angle = 60, hjust = 1)) # text = element_text(family = "Arial"), # ; legend(x = "topright", legend = names(col1), fill = col1)
+  
+  plot(p)
+  
+  
+##### plot by TE family, testis/oocye mean #####
+# testis
+ TEfamily_bed_RPKM_bytestis <- TEfamily_bed_RPKM %>% 
+    filter(sample %in% c("testis-1", "testis-2")) %>%
+    group_by(family, class) %>%
+    summarise(RPKM_mean = mean(RPKM))
+  family_order <- TEfamily_bed_RPKM_bytestis %>% arrange(desc(RPKM_mean)) %>% select(family) %>% distinct()
+  
+  plot.df <- TEfamily_bed_RPKM_bytestis %>%
+    mutate(log2RPKM_mean = round(log2(RPKM_mean +1), 3),
+      family = factor(family, levels = family_order$family), 
+      class = factor(class, levels = TEclass_order))
+  head(plot.df)
+  
+  p1 <- ggplot(plot.df, aes(x=family, y = log2RPKM_mean, fill=class)) + 
+        geom_col(position = "dodge", width = 0.8) + #geom_col(position = position_dodge2(width = 0.5, preserve = "single")
+        labs(x = "TE family", y = "log2(RPKMmean+1)", title = paste0("TE consensi count RPKM, testis")) + 
+        scale_fill_manual(values = TEclass_col) + 
+        facet_grid( ~ class, scales = "free_x", space = "free_x") + # group by class #
+        scale_y_continuous(limits = c(0, y_max)) +
+        theme_classic() +
+        theme(axis.text.x = element_text(angle = 60, hjust = 1)) # text = element_text(family = "Arial"), # ; legend(x = "topright", legend = names(col1), fill = col1)
+    plot(p1)
+
+# oocyte
+ TEfamily_bed_RPKM_byoocyte <- TEfamily_bed_RPKM %>% 
+    filter(sample %in% c("oocyte-1", "oocyte-2")) %>%
+    group_by(family, class) %>%
+    summarise(RPKM_mean = mean(RPKM))
+  family_order <- TEfamily_bed_RPKM_byoocyte %>% arrange(desc(RPKM_mean)) %>% select(family) %>% distinct()
+  
+  plot.df <- TEfamily_bed_RPKM_byoocyte %>%
+    mutate(log2RPKM_mean = round(log2(RPKM_mean +1), 3),
+      family = factor(family, levels = family_order$family), 
+      class = factor(class, levels = TEclass_order))
+  head(plot.df)
+  
+  p2 <- ggplot(plot.df, aes(x=family, y = log2RPKM_mean, fill=class)) + 
+        geom_col(position = "dodge", width = 0.8) + #geom_col(position = position_dodge2(width = 0.5, preserve = "single")
+        labs(x = "TE family", y = "log2(RPKMmean+1)", title = paste0("TE consensi count RPKM, oocyte")) + 
+        scale_fill_manual(values = TEclass_col) + 
+        facet_grid( ~ class, scales = "free_x", space = "free_x") + # group by class #
+        scale_y_continuous(limits = c(0, y_max)) +
+        theme_classic() +
+        theme(axis.text.x = element_text(angle = 60, hjust = 1)) # text = element_text(family = "Arial"), # ; legend(x = "topright", legend = names(col1), fill = col1)
+    plot(p2)
+  
+##### plot by TE family, sample separate #####
+for (Sample in metadata$sample) {
+ TEfamily_bed_RPKM_bysample <- TEfamily_bed_RPKM %>% filter(sample == Sample)
+  family_order <- TEfamily_bed_RPKM_bysample %>% arrange(desc(RPKM)) %>% select(family) %>% distinct()
+  
+  plot.df <- TEfamily_bed_RPKM_bysample %>%
+    mutate(log2RPKM = round(log2(RPKM +1), 3),
+      family = factor(family, levels = family_order$family), 
+      class = factor(class, levels = TEclass_order))
+  head(plot.df)
+  
+  p <- ggplot(plot.df, aes(x=family, y = log2RPKM, fill=class)) + 
+        geom_col(position = "dodge", width = 0.8) + #geom_col(position = position_dodge2(width = 0.5, preserve = "single")
+        labs(x = "TE family", y = "log2(RPKM+1)", title = paste0("TE consensi count RPKM, ", Sample)) + 
+        scale_fill_manual(values = TEclass_col) + 
+        facet_grid( ~ class, scales = "free_x", space = "free_x") + # group by class #
+        scale_y_continuous(limits = c(0, y_max)) +
+        theme_classic() +
+        theme(axis.text.x = element_text(angle = 60, hjust = 1)) # text = element_text(family = "Arial"), # ; legend(x = "topright", legend = names(col1), fill = col1)
+    plot(p)
+}  
+  
+dev.off()
+
+
+
+
+```
+
+
+
+# 05. five end distence
+## 5.1 line chart of five end distence freq
+```{r}
+merge.ls <- list()
+plot.ls <- list()
+for (j in 1:nrow(TE_config)) {
+  TEclass <- TE_config[j,"class"]
+  TEfamily <- gsub("/","-",TE_config[j,"family"])
+  TEsubfamily <- TE_config[j,"TE"]
+  
+  gap_count.ls <- list()
+  for (Sample in metadata$sample) {
+    input_file <- paste0("./11_views_TE_v2/06_5enddis/",Sample,".",TEsubfamily,".gap_count.txt")
+    ### input and calculate frequency ###
+    if (file.info(input_file)$size > 0) {
+    gap_count.ls[[paste(TEsubfamily, Sample)]] <- read.table(input_file, sep="\t", stringsAsFactors = FALSE, header = FALSE)
+    colnames(gap_count.ls[[paste(TEsubfamily, Sample)]]) <- c("gap", "count")
+    gap = data.frame(gap = c(0:30))
+    gap_count.ls[[paste(TEsubfamily, Sample)]] <- gap %>% 
+      left_join(gap_count.ls[[paste(TEsubfamily, Sample)]]) %>% replace(is.na(.), 0) %>% 
+      mutate(count_sum = sum(count)) %>% mutate(freq = round(count/count_sum ,3)) %>% 
+      mutate(sample = Sample, condition = sub("..$", "", Sample)) %>%
+      select("gap", "freq", "sample", "condition")
+    
+    } else {
+      gap_count.ls[[paste(TEsubfamily, Sample)]] <- data.frame(gap = c(0:30), 
+                                                               freq = rep(0,31), 
+                                                               sample = Sample, 
+                                                               condition = sub("..$", "", Sample) )}
+    
+  }
+  
+  # merge for all samples
+  merge.ls[[TEsubfamily]] <- do.call(rbind, gap_count.ls)
+  # calculate mean and sd for freq
+  plot.ls[[TEsubfamily]] <- merge.ls[[TEsubfamily]] %>% 
+    group_by(condition, gap) %>% 
+    summarize(mean_freq = mean(freq), sd_freq = round(sd(freq),3)) %>% 
+    mutate(TE = TEsubfamily, family = TEfamily, class = TEclass)
+
+  ### plot frequency of piRNA sense-antisense 5'end distance ###
+  pdf(paste0("./11_views_TE_v2/06_5enddis_linechart/", TEclass, ".", TEfamily, ".", TEsubfamily, ".pdf"), height = 4, width = 7)
+  p1 <- ggplot(data=plot.ls[[TEsubfamily]], aes(x=gap, y=mean_freq, fill = condition, colour = condition)) + 
+    geom_line(linewidth = 0.5, stat="identity") + 
+    geom_errorbar(aes(ymin = mean_freq - sd_freq, ymax = mean_freq + sd_freq), width = 0.2) +
+    scale_colour_manual(values = condition_col) +
+    scale_y_continuous(expand = c(0, 0)) +
+    scale_x_continuous(expand = c(0, 0), limits = c(0, 30)) +
+    theme_classic(base_size = 15) +
+    labs(title=paste0("piRNA 5' end dis, ",TEclass,".",TEfamily,".",TEsubfamily), x="Nucleotides", y="Frequency") 
+  plot(p1)
+  dev.off()
+
+}
+
+plot.df <- do.call(rbind, plot.ls)
+write.csv(plot.df, paste0("./11_views_TE_v2/06_5enddis_linechart/00_5enddis_freq.csv"), quote = F, row.names = F)
+
+
+
+```
+
+## 5.2 heatmap of five end distence freq
+```{r}
+data.df <- read.csv(paste0("./11_views_TE_v2/06_5enddis_linechart/00_5enddis_freq.csv"))
+head(data.df)
+
+## row annotation
+row_annotation_df <- data.df %>%
+  select(TE, class) %>%
+  distinct() %>% # keep the original arranged order
+  as.data.frame() %>%
+  mutate(class = factor(class, levels = TEclass_order) ) %>%
+  arrange(class, TE) %>% # reorder
+  tibble::column_to_rownames(var = "TE")
+         
+head(row_annotation_df)
+
+row_annotation <- HeatmapAnnotation(df = row_annotation_df,
+                                    col = list(class = TEclass_col),
+                                    which = "row")
+
+## build data matrix for plot
+testis.matrix <- data.df %>% filter(condition == "testis") %>%
+  select(TE, gap, mean_freq) %>%
+  spread(key = gap, value = mean_freq, fill = NA) %>%
+  as.data.frame() %>%
+  tibble::column_to_rownames(var = "TE")
+# reorder by row_annotation
+testis.matrix <- testis.matrix[rownames(row_annotation_df),]
+
+oocyte.matrix <- data.df %>% filter(condition == "oocyte") %>%
+  select(TE, gap, mean_freq) %>%
+  spread(key = gap, value = mean_freq, fill = NA) %>%
+  as.data.frame() %>%
+  tibble::column_to_rownames(var = "TE")
+# reorder by row_annotation
+oocyte.matrix <- oocyte.matrix[rownames(row_annotation_df),]
+
+write.csv(testis.matrix, paste0("./11_views_TE_v2/06_5enddis_heatmap/HeatmapOf5enddis.mean_freq.testis.csv"), quote = F, row.names = F)
+write.csv(oocyte.matrix, paste0("./11_views_TE_v2/06_5enddis_heatmap/HeatmapOf5enddis.mean_freq.oocyte.csv"), quote = F, row.names = F)
+
+
+
+  
+### plot heatmap ###
+col1 <- colorRamp2(c(0, 0.1, 0.45), c("#023e8a", "white", "#9e2a2b"))
+pdf(file=paste0("./11_views_TE_v2/06_5enddis_heatmap/HeatmapOf5enddis.pdf"),height=7,width=7)
+### plot all ###
+Heatmap(testis.matrix, 
+        column_title = "mean of 5enddis freq, testis",
+        left_annotation = row_annotation,
+        cluster_columns = FALSE,
+        cluster_rows = FALSE, row_dend_reorder = FALSE, # keep original order
+        show_row_names = FALSE, show_column_names = TRUE,
+        col = col1,
+        # row_split = row_split, # split by row
+        name = "mean freq",
+        use_raster = FALSE # keep original resolution
+        )
+
+Heatmap(oocyte.matrix, 
+        column_title = "mean of 5enddis freq, oocyte",
+        left_annotation = row_annotation,
+        cluster_columns = FALSE,
+        cluster_rows = FALSE, row_dend_reorder = FALSE, # keep original order
+        show_row_names = FALSE, show_column_names = TRUE,
+        col = col1,
+        # row_split = row_split, # split by row
+        name = "mean freq",
+        use_raster = FALSE # keep original resolution
+        )
+  dev.off()
+  
+```
+
+
+# 06. 1U10A
+## 6.1 barplot
+```{r}
+merge.ls <- list()
+plot.ls <- list()
+for (j in 1:nrow(TE_config)) {
+  TEclass <- TE_config[j,"class"]
+  TEfamily <- gsub("/","-",TE_config[j,"family"])
+  TEsubfamily <- TE_config[j,"TE"]
+
+  nuc_count.ls <- list()
+  Nucleotide.df = data.frame(position = c(rep("First",4),rep("Tenth",4)), nucleotide = rep(c("A","T","C","G"),2))
+  for (Sample in metadata$sample) {
+    input_file <- paste0("./11_views_TE_v2/07_1U10A/piRNA.",Sample,".",TEsubfamily,".count_nuc.txt")
+    file.size <- file.info(input_file)$size
+    file.size[is.na(file.size)] <- 0
+    
+    ### input and calculate frequency ###
+    if (file.size > 0) {
+    nuc_count.ls[[paste(TEsubfamily, Sample)]] <- read.table(input_file, sep="\t", stringsAsFactors = FALSE, header = FALSE, 
+                                    col.names = c("position", "nucleotide", "count")) %>% 
+      mutate(nucleotide = as.character(nucleotide))
+
+    nuc_count.ls[[paste(TEsubfamily, Sample)]] <- Nucleotide.df %>% 
+      left_join(nuc_count.ls[[paste(TEsubfamily, Sample)]]) %>% 
+      replace(is.na(.), 0) %>% 
+      group_by(position) %>% 
+      mutate(count_sum = sum(count)) %>% mutate(freq = (count/count_sum)) %>% 
+      mutate(sample = Sample, condition = sub("..$", "", Sample)) %>% 
+      select("position", "nucleotide", "freq", "sample", "condition")
+
+    
+    } else {nuc_count.ls[[paste(TEsubfamily, Sample)]] <- data.frame(position = c(rep("First",4),rep("Tenth",4)), 
+                                                                     nucleotide = rep(c("A","T","C","G"),2), 
+                                                                     freq = rep(0,8), 
+                                                                     sample = Sample, 
+                                                                     condition = sub("..$", "", Sample) )}
+  }
+  
+  # merge for all samples
+  merge.ls[[TEsubfamily]] <- do.call(rbind, nuc_count.ls)
+  # calculate mean and sd for freq
+  plot.ls[[TEsubfamily]] <- merge.ls[[TEsubfamily]] %>% 
+    mutate(condition = factor(condition, levels = c("testis", "oocyte")),
+           nucleotide = factor(if_else(nucleotide == "T", "U", nucleotide), levels = c("A", "U", "C", "G"))) %>%
+    group_by(condition, position, nucleotide) %>% 
+    summarize(mean_freq = mean(freq), sd_freq = round(sd(freq),3)) %>% 
+    mutate(TE = TEsubfamily, family = TEfamily, class = TEclass) 
+  
+  nucleotide_col = c(A = "#3ec300", U = "#e13700", C = "#118ab2", G = "#2d3047" )
+  pdf(paste0("./11_views_TE_v2/07_1U10A_barplot/",TEclass,".",TEfamily,".",TEsubfamily,".pdf"), height = 4, width = 4)
+  p1 <- ggplot(data=plot.ls[[TEsubfamily]], aes(x=position, y=mean_freq, fill=nucleotide)) + 
+    geom_bar(colour = "black", stat = "identity", position = "fill", width = 0.8) + 
+    theme_classic(base_size = 12) + scale_fill_manual(values = nucleotide_col) +
+    # theme(axis.text.x = element_text(angle = 90)) + 
+    # scale_y_continuous(expand = c(0,0)) +
+    facet_grid( ~ condition) + #, scales = "free_x", space = "free_x"
+    labs(x = "Nucleotide", y = "mean proportion", title = "mapped piRNA composition")
+  plot(p1)
+  
+  dev.off()
+}
+
+
+plot.df <- do.call(rbind, plot.ls) %>% mutate(mean_freq = round(mean_freq, 3))
+write.csv(plot.df, paste0("./11_views_TE_v2/07_1U10A_barplot/00_1U10A_freq.csv"), quote = F, row.names = F)
+
+```
+
+## 6.2 heatmap
+```{r}
+data.df <- read.csv(paste0("./11_views_TE_v2/07_1U10A_barplot/00_1U10A_freq.csv")) %>% 
+  mutate(Rowname = paste0(condition, "-", position, "-", nucleotide)) %>% 
+  mutate(Rowname = factor(Rowname, levels = unique(Rowname))) %>%
+  filter(class != "Others")
+head(data.df)
+
+
+## row annotation
+row_annotation_df <- data.df %>%
+  select(TE, class) %>%
+  distinct() %>% # keep the original arranged order
+  as.data.frame() %>%
+  mutate(class = factor(class, levels = TEclass_order) ) %>%
+  arrange(class, TE) %>% # reorder
+  tibble::column_to_rownames(var = "TE")
+         
+head(row_annotation_df)
+
+row_annotation <- HeatmapAnnotation(df = row_annotation_df,
+                                    col = list(class = TEclass_col),
+                                    which = "row")
+
+## build data matrix for plot
+data.matrix <- data.df %>% 
+  select(TE, Rowname, mean_freq) %>%
+  spread(key = Rowname, value = mean_freq, fill = NA) %>%
+  as.data.frame() %>%
+  tibble::column_to_rownames(var = "TE")
+# reorder by row_annotation
+data.matrix <- data.matrix[rownames(row_annotation_df),]
+write.csv(data.matrix, paste0("./11_views_TE_v2/07_1U10A_heatmap/HeatmapOf1U10A.mean_freq.csv"), quote = F, row.names = F)
+
+  
+### plot heatmap ###
+col1 <- colorRamp2(c(0, 0.25, 1), c("#023e8a", "white", "#9e2a2b"))
+column_split <- rep(1:(ncol(data.matrix) / 4), each = 4)
+
+pdf(file=paste0("./11_views_TE_v2/07_1U10A_heatmap/HeatmapOf1U10A.pdf"),height=7,width=7)
+### plot all ###
+Heatmap(data.matrix, 
+        column_title = "mean of nucleotide freq",
+        left_annotation = row_annotation,
+        cluster_columns = FALSE,
+        cluster_rows = FALSE, row_dend_reorder = FALSE, # keep original order
+        show_row_names = FALSE, show_column_names = TRUE,
+        col = col1,
+        column_split = column_split, # split by col
+        name = "mean freq",
+        use_raster = FALSE # keep original resolution
+        )
+  dev.off()
+  
+
+```
+
