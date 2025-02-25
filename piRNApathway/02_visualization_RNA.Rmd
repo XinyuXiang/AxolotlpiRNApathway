@@ -1,0 +1,117 @@
+---
+title: "02_heatmap_piRNAgene.Rmd"
+author: "Xinyu Xiang"
+date: "2024-05-29"
+output: html_document
+---
+
+```{r setup}
+knitr::opts_chunk$set(echo = TRUE)
+library(pheatmap)
+library(stringr)
+library(dplyr)
+
+```
+
+# 00. configure info
+```{r}
+configure <- read.delim("configure_plot_v3.txt",header=FALSE)
+colnames(configure) <- c("File", "stage", "sample_id", "gender", "source", "condition", "tissuetype")
+configure
+
+```
+
+# 01. calculate RPKM
+```{r}
+
+##### input *_gene.txt #####
+prefix.df = read.delim("./05_count_v2/info_gene.txt",header=TRUE) # featurecount output column 1-6
+
+read.l=list()
+for (i in 1:nrow(configure)){
+  read.l[[i]]=read.table(paste0("./05_count_v2/", configure[i,1], "_gene.txt"), header=T)
+}
+read.df=as.data.frame(do.call(cbind,read.l))
+
+names(read.df)=paste0(configure[,2], sep = "_", configure[,3], sep = "_", configure[,4], sep = "_", configure[,5])
+
+rownames(read.df)=prefix.df$Geneid
+head(read.df)
+dim(read.df) # 56812    41
+
+##### output count matrix #####
+# remove zero count genes
+count.df <- read.df
+summary(count.df$Chr)
+
+# output count matrix
+write.csv(count.df,"./06_DEG_v2/gene_count.csv",quote=F,row.names = T)
+
+
+##### calculate RPKM #####
+prefix.df = rbind(prefix.df, prefix2.df)
+exonLen=prefix.df$Length
+RPKM.df=round(count.df/exonLen*10^3 ,3)
+totalreads=apply(count.df,2,sum)
+for (i in 1:ncol(RPKM.df)){RPKM.df[,i]=round(RPKM.df[,i]/totalreads[i]*10^6,3)}
+write.csv(RPKM.df,"./06_DEG_v2/gene_RPKM.csv",quote=F,row.names = T)
+```
+
+
+# 02. input gene count and piRNA gene list
+```{r}
+RPKM.df = read.csv("./06_DEG_v2/gene_RPKM.csv", row.names = 1)
+
+gene_name.filtered = read.delim("./09_views_Genome/08_heatmap/genelist.piRNA.v3.txt", comment.char = "#", header = TRUE, sep = "\t")
+gene_name.filtered
+
+```
+
+
+```{r}
+'%ino%' <- function(x, table) {
+    xSeq <- seq(along = x)
+    names(xSeq) <- x
+    Out <- xSeq[as.character(table)]
+    Out[!is.na(Out)]}
+    
+    
+RPKM.filter.df <- RPKM.df[row.names(RPKM.df) %ino% gene_name.filtered$geneID, ] %>% 
+  select(paste0(configure$stage, "_", configure$sample_id, "_", configure$gender, "_", configure$source))
+RPKM.filter.df <- t(RPKM.filter.df[gene_name.filtered$geneID,]) # col for gene, row for tissue
+
+write.csv(RPKM.filter.df,"./09_views_Genome/08_heatmap/HeatmapOfpiRNAgenes.filtered.v6.csv",quote=F,row.names = T)
+
+
+```
+
+# 03. plot heatmap
+```{r}
+### annotation
+annotation_row = data.frame(tissue = configure$condition, class = configure$tissuetype, source = configure$source)
+rownames(annotation_row) = rownames(RPKM.filter.df)
+
+annotation_col = data.frame(type = gene_name.filtered$type)
+rownames(annotation_col) = gene_name.filtered$geneID
+```
+
+
+```{r}
+pdf(file=paste0("./09_views_Genome/08_heatmap/HeatmapOfpiRNAgenes.filtered.v6.pdf"),height=15,width=20)
+### plot all ###
+
+    p = pheatmap(log2(RPKM.filter.df+1),
+  labels_row = paste0(str_split_fixed(rownames(RPKM.filter.df), "_", 6)[,2]),
+  labels_col = paste0(gene_name.filtered$gene), 
+  cluster_cols = F, cluster_rows = F, 
+  annotation_row = annotation_row, annotation_col =annotation_col, 
+   cellwidth = 10, cellheight = 10, 
+               main = paste0("heatmap of piRNA genes log2(RPKM+1)"),
+               breaks = seq(0, 6, by = 0.1), color = rev(hcl.colors(61,"Reds"))
+               )
+  print(p)
+
+dev.off()
+  
+```
+

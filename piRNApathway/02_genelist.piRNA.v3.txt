@@ -1,0 +1,35 @@
+geneID	gene	type	description
+AMEX60DD039832	MYBL1	biogenesis	transcription of piRNA precursor transcripts
+AMEX60DD006279	MOV10L1	biogenesis	RNA helicase
+AMEX60DD025975	PLD6	biogenesis	endonuclease generates the ends of phased trailing pre-piRNAs
+AMEX60DD007110	PNLDC1	biogenesis	Pre-piRNA 3' trimming exonuclease
+AMEX60DD014961	TDRKH	biogenesis	Pre-piRNA 3' trimming cofactor, TDRD2
+AMEX60DD019188	DR999_PMT01712 [nr]|HENMT1 [hs]	biogenesis	2-O-met
+AMEX60DD006324	ASZ1	biogenesis	Outer mitochondrial membrane protein required for phased piRNA biogenesis
+AMEX60DD054232	FKBP6	biogenesis	Co-chaperone required to load guide into PIWI protein
+AMEX60DD001203	GPAT2	biogenesis	Required for phased piRNA biogenesis
+AMEX60DD047058	MAEL	biogenesis	Nuage component, Required for transcriptional repression and piRNA production
+AMEX60DD042140	DDX4	biogenesis	Nuage component, RNA-dependent ATPase required for ping-pong piRNA biogenesis
+AMEX60DD029464	LOC102944887 [nr]|GTSF1 [hs]	biogenesis	Required for ping-pong piRNA production in mice
+AMEX60DD049381	RNF17	biogenesis	Nuage component, Tudor domain-containing protein that antagonizes homotypic ping-pong in fly
+AMEX60DD053180	TDRD1	biogenesis	Nuage and Yb body component
+TDRD5	TDRD5	biogenesis	Nuage component
+AMEX60DD032938	TDRD6	biogenesis	Tudor domain-containing protein
+AMEX60DD043825	DR999_PMT21080 [nr]|TDRD7 [hs]	biogenesis	Nuage component
+AMEX60DD011042	TDRD9	biogenesis	Nuage component, required for ping-pong piRNA biogenesis
+AMEX60DD017601	TDRD12	biogenesis	required for ping-pong piRNA biogenesis
+AMEX60DD000065	PIWIL1 [hs]	PIWI	Cytoplasmic PIWI protein required for ping-pong piRNA production
+AMEX60DD002764	PIWIL2	PIWI	Cytoplasmic PIWI protein required for ping-pong piRNA production
+AMEX60DD049556	PIWIL4	PIWI	Nuclear PIWI protein that directs transcriptional silencing
+AMEX60DD056813	SPOCD1_part1	nucleolus	nucleolus cofactor
+AMEX60DD015896	C19ORF84	nucleolus	nucleolus cofactor
+AMEX60DD040705	TEX15	nucleolus	nucleolus cofactor
+AMEX60DD042989	SPIN1	nucleolus	nucleolus cofactor
+AMEX60DD032615	DNMT3A	nucleolus	DNMT
+AMEX60DD027222	DNMT3B	nucleolus	DNMT
+AMEX60DD054040	DNMT3L	nucleolus	DNMT
+AMEX60DD026958	DIDO1	other	control
+AMEX60DD033523	PHF3	other	control
+AMEX60DD032922	RUNX2	control	control
+AMEX60DD005108	CD44	control	control
+
