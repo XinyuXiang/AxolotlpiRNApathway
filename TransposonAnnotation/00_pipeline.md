@@ -1,8 +1,8 @@
-# TE Annotation Pipeline
+# Transposon Annotation Pipeline
 
 This pipeline outlines the steps to obtain TE consensus sequences and annotate the genome in multiple rounds.
 
-- Dependencies
+- Software
   - `RepeatMasker v4.1.5`
   - `RepeatModeler v2.0.5`
   - `DeepTE`
