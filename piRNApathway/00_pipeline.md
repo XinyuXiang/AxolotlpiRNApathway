@@ -31,14 +31,11 @@ This pipeline outlines the steps to process RNA-seq and sRNA-seq raw data, visua
 03 **preprocess**  
    - Use `fastqc` for QC, `cutadapt` for adptor trimming, `STAR` for alignment, `samtools` for bam sort, `bedtools` for annotation.
 
-04 **annotation**  
-   - Annotate piRNA to genome and TE consensus.
-
-05 **genomic analysis**  
+04 **genomic analysis**  
    - Get genomic statistics.
    - Identify piRNA clusters
 
-06 **TE consensus analysis**  
+05 **TE consensus analysis**  
    - Plot piRNA tracks over consensus sequences
    - Analysis ping-pong cycle features (1U10A and 10nt-opverlap).
 
