@@ -1,7 +1,7 @@
 ---
 title: "05_piRNAcluster_plot.Rmd"
 author: "Xinyu Xiang"
-date: "2024-07-03"
+date: "2025-07-23"
 output: html_document
 ---
 
@@ -111,6 +111,7 @@ p1 <- ggplot(length.df, aes(x = Length.kb, y = Directionality, fill = Directiona
   facet_grid( ~ condition)
 plot(p1)
 dev.off()
+
 
 
 ```
@@ -313,4 +314,86 @@ dev.off()
 
 ```
 
+
+# 04. piRNA cluster cumulative fraction
+```{r}
+input.ls <- list()
+data.ls <- list()
+### clean results.table ###
+for (Sample in metadata$sample) {
+
+input.ls[[Sample]] <- read.delim(paste0("./14_piRNAcluster_v2/08_proTRAC_cluster_stat/", Sample, ".results.table.txt"), header = F)
+data.ls[[Sample]] <- data.frame(
+  Cluster = sub(".* ", "", input.ls[[Sample]]$V1),
+  Chr = sub(".*: ", "", input.ls[[Sample]]$V2),
+  Coordinates = sub(".*: ", "", input.ls[[Sample]]$V3),
+  Size_bp = as.numeric(sub(".*: ", "", input.ls[[Sample]]$V4)),
+  Hits_absolute = as.numeric(sub(".*: ", "", input.ls[[Sample]]$V5)),
+  Hits_RPM = as.numeric(sub(".*: ", "", input.ls[[Sample]]$V6)),
+  Hits_RPKM = as.numeric(sub(".*: ", "", input.ls[[Sample]]$V7)),
+  Hits_1T_percent = as.numeric(sub("%", "", sub(".*: ", "", input.ls[[Sample]]$V8))),
+  Hits_10A_percent = as.numeric(sub("%", "", sub(".*: ", "", input.ls[[Sample]]$V9))),
+  Hits_23_33_percent = as.numeric(sub("%", "", sub(".*: ", "", input.ls[[Sample]]$V10))),
+  Main_strand_percent = as.numeric(sub("%", "", sub(".*: ", "", input.ls[[Sample]]$V11))),
+  Directionality = sub(".*: ", "", input.ls[[Sample]]$V12)
+) %>%
+  separate(Coordinates, into = c("Start", "End"), sep = "-", convert = TRUE)
+
+
+write_delim(data.ls[[Sample]], paste0("./14_piRNAcluster_v2/08_proTRAC_cluster_stat/", Sample, ".results.table.clean.txt"), delim = "\t", col_names = T, quote_escape = "none")
+
+}
+
+```
+
+
+```{r}
+### rank and calculate cumulative fraction
+plot.ls <- list()
+for (Sample in metadata$sample) {
+
+## calculate cumulative fraction by Hits_RPM
+plot.ls[[Sample]] <- data.ls[[Sample]] %>%
+  arrange(desc(Hits_RPM)) %>%  
+  mutate(Rank = row_number(), 
+         CumFracRPM = cumsum(Hits_RPM) / sum(Hits_RPM),
+         sample = Sample)
+
+## calculate percentile_90
+  percentile_90_rank <- min(plot.ls[[Sample]]$Rank[plot.ls[[Sample]]$CumFracRPM >= 0.90])
+
+pdf(paste0("./14_piRNAcluster_v2/08_proTRAC_cluster_stat/dotplot_cumulative_fraction.", Sample, ".pdf"), height = 4, width = 4)
+p <- ggplot(plot.ls[[Sample]], aes(x = Rank)) +
+  # left y-axis: CumFracRPM
+  geom_point(aes(y = CumFracRPM), color = "orange", size = 0.5) +  
+  # right y-axis: Hits_RPKM
+  geom_point(aes(y = Hits_RPKM / max(Hits_RPKM)), # proportional right y-axis to left
+            color = "grey", linetype = "dashed", size = 0.5) +
+  scale_y_continuous(
+    sec.axis = sec_axis(~ . * max(plot.ls[[Sample]]$Hits_RPKM), name = "Hits_RPKM")) + # original right y-axis scale
+  
+  # add percentile_90
+  geom_vline(xintercept = percentile_90_rank, linetype = "dashed", color = "red") +
+  annotate("text", x = percentile_90_rank, y = 0, 
+         label = paste0("90th: ", percentile_90_rank), color = "red", size = 3) + 
+
+  labs(title = Sample,
+       x = paste0("Ranked clusters (by Hits_RPM)")) +
+  theme_bw() +
+  theme(
+    axis.title.y.left = element_text(color = "orange"),
+    axis.title.y.right = element_text(color = "grey"),
+    legend.position = "none",
+    panel.grid = element_blank()
+  )
+
+plot(p)
+dev.off()
+
+}
+
+output.df <- do.call(rbind, plot.ls)
+write.csv(output.df, paste0("./14_piRNAcluster_v2/08_proTRAC_cluster_stat/dotplot_cumulative_fraction.csv"), quote = F, row.names = F)
+
+```
 
